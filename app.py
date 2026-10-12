@@ -5,8 +5,18 @@ import matplotlib.patches as patches
 
 st.set_page_config(page_title="Transporte y Estiba de Eventos", layout="wide", page_icon="🚛")
 
-# Enlace de exportación CSV limpio y directo (no sensible a tildes)
+# Enlace de exportación limpia del Google Sheet
 CSV_URL = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv"
+
+# Función para convertir números con comas o puntos decimales a float
+def parse_num(val, default=0.0):
+    if pd.isna(val) or val is None or str(val).strip() == '':
+        return default
+    val_str = str(val).replace(',', '.').strip()
+    try:
+        return float(val_str)
+    except:
+        return default
 
 @st.cache_data(ttl=60)
 def cargar_catalogo():
@@ -29,6 +39,19 @@ col_izq, col_der = st.columns([1, 2])
 
 cantidades = {}
 
+# Paleta de colores por categoría
+COLORES_CAT = {
+    "PA / Cajas": "#1971C2",
+    "Subgraves": "#7048E8",
+    "Amplificación": "#E8590C",
+    "Control / FOH": "#2F9E44",
+    "Cableado": "#495057",
+    "Cableado / Accesorios": "#495057",
+    "Rigging / Estructura": "#1098AD",
+    "Rigging / Motores": "#F59F00",
+    "Monitores": "#20C997"
+}
+
 with col_izq:
     st.subheader("📄 Carga de Albarán")
     archivo = st.file_uploader("Arrastra el PDF o foto del albarán", type=["pdf", "png", "jpg", "jpeg"])
@@ -42,13 +65,14 @@ with col_izq:
             nombre = str(row.get("Descripción / Unidad Logística", f"Bulto {idx+1}"))
             codigo = str(row.get("ID / Código", f"B{idx+1}"))
             
-            # Valor por defecto inicial para ver datos en pantalla
+            # Valor por defecto inicial
             val_def = 4 if "KSL" in nombre else (3 if "SL-SUB" in nombre or "D80" in nombre else 0)
             cantidades[codigo] = st.number_input(nombre, min_value=0, value=val_def, step=1, key=f"inp_{codigo}")
 
-# Cálculos dinámicos basados en la hoja de cálculo
+# Cálculos dinámicos
 ml_neto_total = 0.0
 peso_total = 0.0
+items_a_cargar = []
 
 if df_catalogo is not None:
     for idx, row in df_catalogo.iterrows():
@@ -56,17 +80,33 @@ if df_catalogo is not None:
         cant = cantidades.get(codigo, 0)
         
         if cant > 0:
-            try:
-                peso_u = float(row.get("Peso Bruto por bulto (kg)", 0))
-            except:
-                peso_u = 0.0
-            try:
-                ml_u = float(row.get("ML unitarios por bulto (m)", 0))
-            except:
-                ml_u = 0.0
+            peso_u = parse_num(row.get("Peso Bruto por bulto (kg)", 0))
+            ml_u = parse_num(row.get("ML unitarios por bulto (m)", 0))
+            fondo_cm = parse_num(row.get("Fondo de calle (cm)", 100))
+            bultos_ancho = max(1, int(parse_num(row.get("Bultos a lo ancho", 2))))
+            alturas = max(1, int(parse_num(row.get("Alturas de apilado", 1))))
+            bultos_por_calle = max(1, int(parse_num(row.get("Bultos por calle", bultos_ancho * alturas))))
+            categoria = str(row.get("Categoría", "Varios"))
+            nombre = str(row.get("Descripción / Unidad Logística", codigo))
+            
+            # Si en la hoja ML unitario estaba vacío o en 0, lo calculamos al vuelo
+            if ml_u <= 0 and bultos_por_calle > 0:
+                ml_u = (fondo_cm / 100.0) / bultos_por_calle
                 
             peso_total += cant * peso_u
             ml_neto_total += cant * ml_u
+            
+            items_a_cargar.append({
+                "nombre": nombre,
+                "cant": cant,
+                "categoria": categoria,
+                "fondo_m": fondo_cm / 100.0,
+                "bultos_ancho": bultos_ancho,
+                "alturas": alturas,
+                "bultos_por_calle": bultos_por_calle,
+                "ml_totales": cant * ml_u,
+                "color": COLORES_CAT.get(categoria, "#343A40")
+            })
 
 ml_con_holgura = ml_neto_total * 1.10
 
@@ -87,17 +127,38 @@ with col_der:
 
     st.subheader("📐 Esquema de Estiba en Camión")
     
-    fig, ax = plt.subplots(figsize=(11, 3.2))
+    fig, ax = plt.subplots(figsize=(12, 3.4))
     truck_width = 2.45
     total_length = 13.60
 
+    # Chasis tráiler
     ax.add_patch(patches.Rectangle((0, 0), total_length, truck_width, linewidth=2, edgecolor='#333333', facecolor='#F8F9FA'))
 
+    # Dibujar bultos por calles a lo largo del semirremolque
+    pos_x = 0.05
+    for item in items_a_cargar:
+        calles_necesarias = item["cant"] / item["bultos_por_calle"]
+        ancho_avance = calles_necesarias * item["fondo_m"]
+        
+        if ancho_avance > 0:
+            rect = patches.FancyBboxPatch(
+                (pos_x, 0.05), ancho_avance, truck_width - 0.10,
+                boxstyle="round,pad=0.02", linewidth=1.2,
+                edgecolor='#1E1E1E', facecolor=item["color"], alpha=0.85
+            )
+            ax.add_patch(rect)
+            
+            # Etiqueta en el bloque
+            texto = f"{item['cant']}x {item['nombre']}\n({ancho_avance:.2f} ML)"
+            ax.text(pos_x + ancho_avance/2, truck_width/2, texto,
+                    color='white', ha='center', va='center', fontsize=7.5, fontweight='bold')
+            
+            pos_x += ancho_avance + 0.05
+
+    # Línea de corte de fin de carga
     if ml_con_holgura > 0:
-        ancho_carga = min(total_length, ml_con_holgura)
-        ax.add_patch(patches.Rectangle((0, 0), ancho_carga, truck_width, facecolor='#1971C2', alpha=0.25))
-        ax.axvline(x=ancho_carga, color='#D6336C', linestyle='--', linewidth=2.5)
-        ax.text(ancho_carga + 0.15, 1.22, f"FIN DE CARGA\n{ml_con_holgura:.2f} ML\n({peso_total:,.0f} kg)", 
+        ax.axvline(x=ml_con_holgura, color='#D6336C', linestyle='--', linewidth=2.5)
+        ax.text(ml_con_holgura + 0.15, 1.22, f"FIN DE CARGA\n{ml_con_holgura:.2f} ML\n({peso_total:,.0f} kg)", 
                 color='#D6336C', fontsize=8.5, fontweight='bold', va='center')
 
     ax.text(0.1, truck_width - 0.25, "CABECERA / FRENTE", fontsize=7.5, fontweight='bold', color='#495057')
