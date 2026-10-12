@@ -5,7 +5,6 @@ import matplotlib.patches as patches
 
 st.set_page_config(page_title="Transporte y Estiba de Eventos", layout="wide", page_icon="🚛")
 
-# Conexión limpia con tu Google Sheet
 CSV_URL = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv"
 
 def parse_num(val, default=0.0):
@@ -30,7 +29,7 @@ df_catalogo = cargar_catalogo()
 st.title("🚛 Gestor de Transporte y Estiba de Eventos")
 
 if df_catalogo is None:
-    st.error("⚠️ Error temporal al leer Google Sheets. Reintentando conexión...")
+    st.error("⚠️ Error temporal al leer Google Sheets. Reintentando...")
 else:
     st.success("☁️ Sincronizado en tiempo real con tu Catálogo de Google Drive.")
 
@@ -61,11 +60,11 @@ with col_izq:
             nombre = str(row.get("Descripción / Unidad Logística", f"Bulto {idx+1}"))
             codigo = str(row.get("ID / Código", f"B{idx+1}"))
             
-            # Cantidades de ejemplo iniciales
+            # Cantidad inicial
             val_def = 4 if "KSL" in nombre else (3 if "SL-SUB" in nombre or "D80" in nombre else 0)
             cantidades[codigo] = st.number_input(nombre, min_value=0, value=val_def, step=1, key=f"inp_{codigo}")
 
-# 1. DESGLOSE DE HUELLAS FÍSICAS EN EL SUELO (RESIDUALES Y REMONTABILIDAD)
+# 1. GENERACIÓN DE HUELLAS DE SUELO (RESPETANDO APILADOS Y MEDIDAS REALES)
 huellas_suelo = []
 peso_total = 0.0
 
@@ -81,13 +80,14 @@ if df_catalogo is not None:
             ancho_cm = parse_num(row.get("Ancho al frontal de carga (cm)", 60))
             fondo_cm = parse_num(row.get("Fondo de calle (cm)", 80))
             max_stack = max(1, int(parse_num(row.get("Alturas de apilado", 1))))
+            bultos_ancho_definidos = int(parse_num(row.get("Bultos a lo ancho", 0)))
             
+            # Ancho y fondo en metros
             ancho_m = max(0.30, ancho_cm / 100.0)
             fondo_m = max(0.30, fondo_cm / 100.0)
             
             peso_total += cant * peso_u
             
-            # Desglosar en torres/huellas según alturas de apilado
             torres_completas = cant // max_stack
             sobrante = cant % max_stack
             
@@ -96,6 +96,7 @@ if df_catalogo is not None:
                     "nombre": nombre,
                     "ancho": ancho_m,
                     "fondo": fondo_m,
+                    "bultos_ancho_max": bultos_ancho_definidos,
                     "color": COLORES_CAT.get(categoria, "#495057"),
                     "peso": peso_u * max_stack,
                     "alturas": max_stack
@@ -105,29 +106,37 @@ if df_catalogo is not None:
                     "nombre": nombre,
                     "ancho": ancho_m,
                     "fondo": fondo_m,
+                    "bultos_ancho_max": bultos_ancho_definidos,
                     "color": COLORES_CAT.get(categoria, "#495057"),
                     "peso": peso_u * sobrante,
                     "alturas": sobrante
                 })
 
-# 2. MOTOR DE COLOCACIÓN 2D EN EL CAMIÓN
-ANCHO_CAMION = 2.45
+# 2. MOTOR DE ESTIBA REAL (ANCHO EUROPEO 2.48 m)
+ANCHO_CAMION = 2.48   # Semirremolque estándar europeo útil
 LARGO_CAMION = 13.60
 
-cur_x = 0.05
-cur_y = 0.05
+cur_x = 0.03
+cur_y = 0.02
 fondo_max_calle = 0.0
 bloques_dibujo = []
+items_en_calle = 0
 
 for b in huellas_suelo:
     w = b["ancho"]
     d = b["fondo"]
+    max_a_lo_ancho = b["bultos_ancho_max"]
     
-    # Si este bulto ya no cabe en el ancho de la calle actual, saltamos a la siguiente
-    if (cur_y + w) > (ANCHO_CAMION + 0.02):
-        cur_x += fondo_max_calle + 0.03
-        cur_y = 0.05
+    # Comprobar si cabe en la calle actual (por metros físicos o por cupo definido en la hoja)
+    excede_ancho = (cur_y + w) > (ANCHO_CAMION + 0.005)
+    excede_cupo = (max_a_lo_ancho > 0 and items_en_calle >= max_a_lo_ancho)
+    
+    if excede_ancho or excede_cupo:
+        # Salto de calle hacia la trasera
+        cur_x += fondo_max_calle + 0.02
+        cur_y = 0.02
         fondo_max_calle = 0.0
+        items_en_calle = 0
         
     bloques_dibujo.append({
         "x": cur_x,
@@ -140,13 +149,13 @@ for b in huellas_suelo:
         "alturas": b["alturas"]
     })
     
-    cur_y += w + 0.02
+    cur_y += w + 0.005  # Holgura de solo 5 mm para dibujo limpio
+    items_en_calle += 1
     if d > fondo_max_calle:
         fondo_max_calle = d
 
-# Metros lineales reales alcanzados por la estiba
 ml_ocupados = (cur_x + fondo_max_calle) if len(bloques_dibujo) > 0 else 0.0
-ml_con_holgura = ml_ocupados * 1.05  # 5% de holgura por irregularidades de carga
+ml_con_holgura = ml_ocupados * 1.05
 
 with col_der:
     st.subheader("📊 Resumen Logístico de Carga")
@@ -168,30 +177,28 @@ with col_der:
     fig, ax = plt.subplots(figsize=(12, 3.5))
     ax.add_patch(patches.Rectangle((0, 0), LARGO_CAMION, ANCHO_CAMION, linewidth=2, edgecolor='#333333', facecolor='#F8F9FA'))
 
-    # Dibujar cada huella individual con su posición y dimensiones exactas
     for b in bloques_dibujo:
         rect = patches.FancyBboxPatch(
             (b["x"], b["y"]), b["w_x"], b["h_y"],
-            boxstyle="round,pad=0.015", linewidth=1.1,
+            boxstyle="round,pad=0.01", linewidth=1.1,
             edgecolor='#1E1E1E', facecolor=b["color"], alpha=0.88
         )
         ax.add_patch(rect)
         
-        texto_apilado = f" ({b['alturas']} alt)" if b['alturas'] > 1 else ""
+        texto_apilado = f"\n({b['alturas']} alt)" if b['alturas'] > 1 else ""
         ax.text(
             b["x"] + b["w_x"]/2, b["y"] + b["h_y"]/2, 
             f"{b['nombre']}{texto_apilado}",
-            color='white', ha='center', va='center', fontsize=6.8, fontweight='bold'
+            color='white', ha='center', va='center', fontsize=6.5, fontweight='bold'
         )
 
-    # Línea de fin de carga
     if ml_con_holgura > 0:
         ax.axvline(x=ml_con_holgura, color='#D6336C', linestyle='--', linewidth=2.5)
-        ax.text(ml_con_holgura + 0.15, 1.22, f"FIN DE CARGA\n{ml_con_holgura:.2f} ML\n({peso_total:,.0f} kg)", 
+        ax.text(ml_con_holgura + 0.15, 1.24, f"FIN DE CARGA\n{ml_con_holgura:.2f} ML\n({peso_total:,.0f} kg)", 
                 color='#D6336C', fontsize=8.5, fontweight='bold', va='center')
 
-    ax.text(0.1, ANCHO_CAMION - 0.22, "◄ FRENTE / TRACTORA", fontsize=7.5, fontweight='bold', color='#495057')
-    ax.text(LARGO_CAMION - 0.2, ANCHO_CAMION - 0.22, "PUERTAS / TRASERA ►", fontsize=7.5, fontweight='bold', color='#495057', ha='right')
+    ax.text(0.1, ANCHO_CAMION - 0.20, "◄ FRENTE / TRACTORA", fontsize=7.5, fontweight='bold', color='#495057')
+    ax.text(LARGO_CAMION - 0.2, ANCHO_CAMION - 0.20, "PUERTAS / TRASERA ►", fontsize=7.5, fontweight='bold', color='#495057', ha='right')
 
     ax.set_xlim(-0.2, LARGO_CAMION + 0.2)
     ax.set_ylim(-0.2, ANCHO_CAMION + 0.3)
