@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from collections import defaultdict
 
 st.set_page_config(page_title="Transporte y Estiba de Eventos", layout="wide", page_icon="🚛")
 
@@ -75,7 +74,6 @@ with col_izq:
             nombre = str(row.get("Descripción / Unidad Logística", f"Bulto {idx+1}"))
             codigo = str(row.get("ID / Código", f"B{idx+1}"))
             
-            # Valores por defecto iniciales
             val_def = 2 if "KSL" in nombre and "Bumper" not in nombre else (7 if "D80" in nombre else (8 if "120x60" in nombre else 0))
             cantidades[codigo] = st.number_input(nombre, min_value=0, value=val_def, step=1, key=f"inp_{codigo}")
 
@@ -96,6 +94,9 @@ if df_catalogo is not None:
             fondo_cm = parse_num(row.get("Fondo de calle (cm)", 80))
             max_stack = max(1, int(parse_num(row.get("Alturas de apilado", 1))))
             
+            # Permitir rotar si es baúl modular
+            puede_rotar = ("baúl" in nombre.lower()) or ("baul" in nombre.lower()) or ("cables" in nombre.lower())
+            
             ancho_m = max(0.30, ancho_cm / 100.0)
             fondo_m = max(0.30, fondo_cm / 100.0)
             
@@ -112,7 +113,8 @@ if df_catalogo is not None:
                     "fondo": fondo_m,
                     "color": COLORES_CAT.get(categoria, "#495057"),
                     "peso": peso_u * max_stack,
-                    "alturas": max_stack
+                    "alturas": max_stack,
+                    "puede_rotar": puede_rotar
                 })
             if sobrante > 0:
                 huellas_suelo.append({
@@ -122,90 +124,98 @@ if df_catalogo is not None:
                     "fondo": fondo_m,
                     "color": COLORES_CAT.get(categoria, "#495057"),
                     "peso": peso_u * sobrante,
-                    "alturas": sobrante
+                    "alturas": sobrante,
+                    "puede_rotar": puede_rotar
                 })
 
-# 2. MOTOR DE ESTIBA PROFESIONAL POR CALLES HOMOGÉNEAS
+# 2. MOTOR DE ESTIBA EN 4 CARRILES (60 CM) + ESPECIALES AL FINAL
 ANCHO_CAMION = 2.48
 LARGO_CAMION = 13.60
 
-# Agrupar por bulto exacto
-grupos = defaultdict(list)
+track_y = [0.02, 0.625, 1.23, 1.835]
+track_x = [0.03, 0.03, 0.03, 0.03]
+
+items_60 = []
+items_120 = []
+items_special = []
+
 for h in huellas_suelo:
-    grupos[(h['categoria'], h['nombre'], h['fondo'], h['ancho'])].append(h)
+    w = h['ancho']
+    d = h['fondo']
+    if 0.55 <= w <= 0.65:
+        items_60.append(h)
+    elif h.get('puede_rotar', False) and (0.55 <= d <= 0.65):
+        h_rot = dict(h)
+        h_rot['ancho'] = d
+        h_rot['fondo'] = w
+        items_60.append(h_rot)
+    elif 1.10 <= w <= 1.35:
+        items_120.append(h)
+    elif h.get('puede_rotar', False) and (1.10 <= d <= 1.35):
+        h_rot = dict(h)
+        h_rot['ancho'] = d
+        h_rot['fondo'] = w
+        items_120.append(h_rot)
+    else:
+        items_special.append(h)
 
-calles_completas = []
-picos_sueltos = []
+placed = []
 
-for key, items in grupos.items():
-    cat, nombre, fondo, ancho = key
-    max_a_lo_ancho = int(ANCHO_CAMION // ancho)
-    
-    # Extraer todas las calles completas de 4 bultos (o según su ancho)
-    while len(items) >= max_a_lo_ancho:
-        calle = items[:max_a_lo_ancho]
-        calles_completas.append((cat, fondo, calle))
-        items = items[max_a_lo_ancho:]
-        
-    picos_sueltos.extend(items)
+# Cargar modulares de 60 cm ordenados por prioridad de peso (cabecera a trasera)
+items_60.sort(key=lambda x: (ORDEN_CARGA_CAT.get(x['categoria'], 10), -x['fondo'], x['nombre']))
 
-# Ordenar picos por categoría y profundidad
-picos_sueltos.sort(key=lambda x: (ORDEN_CARGA_CAT.get(x['categoria'], 10), -x['fondo'], -x['ancho']))
+while items_60:
+    curr = items_60.pop(0)
+    best_track = track_x.index(min(track_x))
+    x = track_x[best_track]
+    y = track_y[best_track]
+    placed.append({
+        'x': x, 'y': y, 'w_x': curr['fondo'], 'h_y': curr['ancho'],
+        'nombre': curr['nombre'], 'color': curr['color'], 'peso': curr['peso'], 'alturas': curr['alturas']
+    })
+    track_x[best_track] += curr['fondo'] + 0.015
 
-calles_mixtas = []
-while picos_sueltos:
-    seed = picos_sueltos.pop(0)
-    calle = [seed]
-    rem_w = ANCHO_CAMION - seed['ancho'] - 0.01
-    
-    # 1. Buscar en picos otro que tenga el mismo fondo
-    i = 0
-    while i < len(picos_sueltos) and rem_w >= 0.30:
-        if abs(picos_sueltos[i]['fondo'] - seed['fondo']) < 0.05 and picos_sueltos[i]['ancho'] <= rem_w + 0.01:
-            calle.append(picos_sueltos.pop(i))
-            rem_w -= (calle[-1]['ancho'] + 0.005)
-        else:
-            i += 1
-            
-    # 2. Si aún hay hueco, añadir cualquier otro pico compatible
-    i = 0
-    while i < len(picos_sueltos) and rem_w >= 0.30:
-        if picos_sueltos[i]['ancho'] <= rem_w + 0.01:
-            calle.append(picos_sueltos.pop(i))
-            rem_w -= (calle[-1]['ancho'] + 0.005)
-        else:
-            i += 1
-            
-    calles_mixtas.append((seed['categoria'], max(x['fondo'] for x in calle), calle))
+# Cargar bultos de 120 cm (ocupan 2 carriles)
+for curr in items_120:
+    max_01 = max(track_x[0], track_x[1])
+    max_23 = max(track_x[2], track_x[3])
+    if max_01 <= max_23:
+        x = max_01
+        y = track_y[0]
+        track_x[0] = x + curr['fondo'] + 0.015
+        track_x[1] = x + curr['fondo'] + 0.015
+    else:
+        x = max_23
+        y = track_y[2]
+        track_x[2] = x + curr['fondo'] + 0.015
+        track_x[3] = x + curr['fondo'] + 0.015
+    placed.append({
+        'x': x, 'y': y, 'w_x': curr['fondo'], 'h_y': curr['ancho'],
+        'nombre': curr['nombre'], 'color': curr['color'], 'peso': curr['peso'], 'alturas': curr['alturas']
+    })
 
-# Unir todas las calles y ordenarlas por orden de carga (cabecera a trasera)
-todas_las_calles = calles_completas + calles_mixtas
-todas_las_calles.sort(key=lambda x: (ORDEN_CARGA_CAT.get(x[0], 10), -x[1]))
+# Cargar bultos no estándar al final (hacia las puertas)
+cur_end_x = max(track_x) if placed else 0.03
+cur_y = 0.02
+calle_fondo = 0.0
+for curr in items_special:
+    w = curr['ancho']
+    d = curr['fondo']
+    if cur_y + w > ANCHO_CAMION + 0.01:
+        cur_end_x += calle_fondo + 0.02
+        cur_y = 0.02
+        calle_fondo = 0.0
+    placed.append({
+        'x': cur_end_x, 'y': cur_y, 'w_x': d, 'h_y': w,
+        'nombre': curr['nombre'], 'color': curr['color'], 'peso': curr['peso'], 'alturas': curr['alturas']
+    })
+    cur_y += w + 0.01
+    if d > calle_fondo:
+        calle_fondo = d
 
-# Posicionar bloques físicamente
-bloques_dibujo = []
-cur_x = 0.03
+total_ml = max([p['x'] + p['w_x'] for p in placed]) if placed else 0.0
+ml_con_holgura = total_ml * 1.05
 
-for cat, fondo_calle, calle_items in todas_las_calles:
-    cur_y = 0.02
-    for item in calle_items:
-        bloques_dibujo.append({
-            'x': cur_x,
-            'y': cur_y,
-            'w_x': item['fondo'],
-            'h_y': item['ancho'],
-            'nombre': item['nombre'],
-            'color': item['color'],
-            'peso': item['peso'],
-            'alturas': item['alturas']
-        })
-        cur_y += item['ancho'] + 0.005
-    cur_x += fondo_calle + 0.02
-
-ml_ocupados = cur_x if len(bloques_dibujo) > 0 else 0.0
-ml_con_holgura = ml_ocupados * 1.05
-
-# Generador de etiquetas legibles
 def alias_corto(name, alturas):
     n = name.lower()
     if "ksl" in n and "bumper" not in n:
@@ -227,7 +237,7 @@ def alias_corto(name, alturas):
     elif "motor" in n:
         base = "Motores"
     else:
-        base = name[:8]
+        base = name[:9]
     if alturas > 1:
         return f"{base}\n({alturas} alt)"
     return base
@@ -235,7 +245,7 @@ def alias_corto(name, alturas):
 with col_der:
     st.subheader("📊 Resumen Logístico de Carga")
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Metros Lineales (Fondo)", f"{ml_con_holgura:.2f} ML", f"Neto: {ml_ocupados:.2f} m")
+    m1.metric("Metros Lineales (Fondo)", f"{ml_con_holgura:.2f} ML", f"Neto: {total_ml:.2f} m")
     m2.metric("Peso Total Estimado", f"{peso_total:,.0f} kg")
     
     if ml_con_holgura <= 7.8 and peso_total <= 9000:
@@ -247,12 +257,12 @@ with col_der:
     ocupacion = min(100, int((ml_con_holgura / LARGO_CAMION) * 100))
     m4.metric("Ocupación Tráiler", f"{ocupacion}%", f"{max(0.0, LARGO_CAMION - ml_con_holgura):.1f} m libres")
 
-    st.subheader("📐 Esquema de Estiba en Planta (Calles Homogéneas)")
+    st.subheader("📐 Esquema de Estiba en Planta (4 Carriles Touring)")
     
     fig, ax = plt.subplots(figsize=(13, 3.8))
     ax.add_patch(patches.Rectangle((0, 0), LARGO_CAMION, ANCHO_CAMION, linewidth=2, edgecolor='#333333', facecolor='#F8F9FA'))
 
-    for b in bloques_dibujo:
+    for b in placed:
         rect = patches.FancyBboxPatch(
             (b["x"], b["y"]), b["w_x"], b["h_y"],
             boxstyle="round,pad=0.01", linewidth=1.1,
@@ -271,7 +281,6 @@ with col_der:
         ax.text(ml_con_holgura + 0.15, 1.24, f"FIN DE CARGA\n{ml_con_holgura:.2f} ML", 
                 color='#D6336C', fontsize=8.5, fontweight='bold', va='center')
 
-    # Marcadores limpios fuera del camión
     ax.text(0.1, ANCHO_CAMION + 0.12, "FRENTE / CABECERA", fontsize=8.5, fontweight='bold', color='#1971C2')
     ax.text(LARGO_CAMION - 0.2, ANCHO_CAMION + 0.12, "PUERTAS / TRASERA", fontsize=8.5, fontweight='bold', color='#D6336C', ha='right')
 
