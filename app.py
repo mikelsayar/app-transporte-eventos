@@ -5,6 +5,7 @@ import matplotlib.patches as patches
 
 st.set_page_config(page_title="Transporte y Estiba de Eventos", layout="wide", page_icon="🚛")
 
+# Enlace de exportación limpia del Google Sheet
 CSV_URL = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv"
 
 def parse_num(val, default=0.0):
@@ -39,13 +40,28 @@ cantidades = {}
 COLORES_CAT = {
     "PA / Cajas": "#1971C2",
     "Subgraves": "#7048E8",
+    "Rigging / Motores": "#F59F00",
+    "Rigging / Estructura": "#1098AD",
     "Amplificación": "#E8590C",
     "Control / FOH": "#2F9E44",
+    "Monitores": "#20C997",
     "Cableado": "#495057",
     "Cableado / Accesorios": "#495057",
-    "Rigging / Estructura": "#1098AD",
-    "Rigging / Motores": "#F59F00",
-    "Monitores": "#20C997"
+    "Varios": "#6C757D"
+}
+
+# Orden lógico de carga de proa a popa (pesos pesados primero)
+ORDEN_CARGA_CAT = {
+    "PA / Cajas": 1,
+    "Subgraves": 2,
+    "Rigging / Motores": 3,
+    "Rigging / Estructura": 4,
+    "Amplificación": 5,
+    "Control / FOH": 6,
+    "Monitores": 7,
+    "Cableado": 8,
+    "Cableado / Accesorios": 9,
+    "Varios": 10
 }
 
 with col_izq:
@@ -60,11 +76,11 @@ with col_izq:
             nombre = str(row.get("Descripción / Unidad Logística", f"Bulto {idx+1}"))
             codigo = str(row.get("ID / Código", f"B{idx+1}"))
             
-            # Cantidad inicial
+            # Valor inicial por defecto para pruebas
             val_def = 4 if "KSL" in nombre else (3 if "SL-SUB" in nombre or "D80" in nombre else 0)
             cantidades[codigo] = st.number_input(nombre, min_value=0, value=val_def, step=1, key=f"inp_{codigo}")
 
-# 1. GENERACIÓN DE HUELLAS DE SUELO (RESPETANDO APILADOS Y MEDIDAS REALES)
+# 1. DESGLOSE DE HUELLAS FÍSICAS DE SUELO (TENIENDO EN CUENTA APILADO)
 huellas_suelo = []
 peso_total = 0.0
 
@@ -80,9 +96,11 @@ if df_catalogo is not None:
             ancho_cm = parse_num(row.get("Ancho al frontal de carga (cm)", 60))
             fondo_cm = parse_num(row.get("Fondo de calle (cm)", 80))
             max_stack = max(1, int(parse_num(row.get("Alturas de apilado", 1))))
-            bultos_ancho_definidos = int(parse_num(row.get("Bultos a lo ancho", 0)))
+            remontable_str = str(row.get("¿Remontable?", "")).lower()
             
-            # Ancho y fondo en metros
+            # Permitir rotar si es un baúl estándar o maleta cuadrada/modular
+            puede_rotar = ("baúl" in nombre.lower()) or ("baul" in nombre.lower()) or ("cables" in nombre.lower())
+            
             ancho_m = max(0.30, ancho_cm / 100.0)
             fondo_m = max(0.30, fondo_cm / 100.0)
             
@@ -94,67 +112,99 @@ if df_catalogo is not None:
             for _ in range(torres_completas):
                 huellas_suelo.append({
                     "nombre": nombre,
+                    "categoria": categoria,
                     "ancho": ancho_m,
                     "fondo": fondo_m,
-                    "bultos_ancho_max": bultos_ancho_definidos,
                     "color": COLORES_CAT.get(categoria, "#495057"),
                     "peso": peso_u * max_stack,
-                    "alturas": max_stack
+                    "alturas": max_stack,
+                    "puede_rotar": puede_rotar
                 })
             if sobrante > 0:
                 huellas_suelo.append({
                     "nombre": nombre,
+                    "categoria": categoria,
                     "ancho": ancho_m,
                     "fondo": fondo_m,
-                    "bultos_ancho_max": bultos_ancho_definidos,
                     "color": COLORES_CAT.get(categoria, "#495057"),
                     "peso": peso_u * sobrante,
-                    "alturas": sobrante
+                    "alturas": sobrante,
+                    "puede_rotar": puede_rotar
                 })
 
-# 2. MOTOR DE ESTIBA REAL (ANCHO EUROPEO 2.48 m)
-ANCHO_CAMION = 2.48   # Semirremolque estándar europeo útil
+# 2. MOTOR DE EMPAQUETADO INTELIGENTE (OPTIMIZACIÓN DE CALLES 2D)
+ANCHO_CAMION = 2.48
 LARGO_CAMION = 13.60
 
-cur_x = 0.03
-cur_y = 0.02
-fondo_max_calle = 0.0
+cola_bultos = list(huellas_suelo)
+# Ordenar inicialmente por prioridad de carga y profundidad
+cola_bultos.sort(key=lambda x: (ORDEN_CARGA_CAT.get(x["categoria"], 10), -x["fondo"], -x["ancho"]))
+
 bloques_dibujo = []
-items_en_calle = 0
+cur_x = 0.03
 
-for b in huellas_suelo:
-    w = b["ancho"]
-    d = b["fondo"]
-    max_a_lo_ancho = b["bultos_ancho_max"]
+while len(cola_bultos) > 0:
+    # Abrir nueva calle con el primer bulto disponible
+    bulto_base = cola_bultos.pop(0)
+    calle_items = [bulto_base]
+    ancho_disponible = ANCHO_CAMION - bulto_base["ancho"] - 0.02
     
-    # Comprobar si cabe en la calle actual (por metros físicos o por cupo definido en la hoja)
-    excede_ancho = (cur_y + w) > (ANCHO_CAMION + 0.005)
-    excede_cupo = (max_a_lo_ancho > 0 and items_en_calle >= max_a_lo_ancho)
-    
-    if excede_ancho or excede_cupo:
-        # Salto de calle hacia la trasera
-        cur_x += fondo_max_calle + 0.02
-        cur_y = 0.02
-        fondo_max_calle = 0.0
-        items_en_calle = 0
+    # 1º: Intentar meter bultos del mismo tipo o misma profundidad
+    i = 0
+    while i < len(cola_bultos) and ancho_disponible >= 0.35:
+        cand = cola_bultos[i]
+        mismo_tipo = (cand["nombre"] == bulto_base["nombre"])
+        misma_profundidad = (abs(cand["fondo"] - bulto_base["fondo"]) <= 0.05)
         
-    bloques_dibujo.append({
-        "x": cur_x,
-        "y": cur_y,
-        "w_x": d,
-        "h_y": w,
-        "nombre": b["nombre"],
-        "color": b["color"],
-        "peso": b["peso"],
-        "alturas": b["alturas"]
-    })
+        if (mismo_tipo or misma_profundidad) and (cand["ancho"] <= ancho_disponible + 0.01):
+            calle_items.append(cand)
+            ancho_disponible -= (cand["ancho"] + 0.005)
+            cola_bultos.pop(i)
+        else:
+            i += 1
+            
+    # 2º: Si aún sobra ancho en la calle, rastrear cualquier bulto que encaje
+    i = 0
+    while i < len(cola_bultos) and ancho_disponible >= 0.35:
+        cand = cola_bultos[i]
+        cand_w = cand["ancho"]
+        cand_d = cand["fondo"]
+        
+        if cand_w <= ancho_disponible + 0.01:
+            calle_items.append(cand)
+            ancho_disponible -= (cand_w + 0.005)
+            cola_bultos.pop(i)
+        elif cand.get("puede_rotar", False) and (cand_d <= ancho_disponible + 0.01):
+            # Rotar el bulto para que encaje
+            cand_rot = dict(cand)
+            cand_rot["ancho"] = cand_d
+            cand_rot["fondo"] = cand_w
+            calle_items.append(cand_rot)
+            ancho_disponible -= (cand_d + 0.005)
+            cola_bultos.pop(i)
+        else:
+            i += 1
+            
+    # Posicionar físicamente todos los bultos seleccionados en esta calle
+    cur_y = 0.02
+    max_fondo_calle = max(item["fondo"] for item in calle_items)
     
-    cur_y += w + 0.005  # Holgura de solo 5 mm para dibujo limpio
-    items_en_calle += 1
-    if d > fondo_max_calle:
-        fondo_max_calle = d
+    for item in calle_items:
+        bloques_dibujo.append({
+            "x": cur_x,
+            "y": cur_y,
+            "w_x": item["fondo"],
+            "h_y": item["ancho"],
+            "nombre": item["nombre"],
+            "color": item["color"],
+            "peso": item["peso"],
+            "alturas": item["alturas"]
+        })
+        cur_y += item["ancho"] + 0.005
+        
+    cur_x += max_fondo_calle + 0.02
 
-ml_ocupados = (cur_x + fondo_max_calle) if len(bloques_dibujo) > 0 else 0.0
+ml_ocupados = cur_x if len(bloques_dibujo) > 0 else 0.0
 ml_con_holgura = ml_ocupados * 1.05
 
 with col_der:
@@ -172,7 +222,7 @@ with col_der:
     ocupacion = min(100, int((ml_con_holgura / LARGO_CAMION) * 100))
     m4.metric("Ocupación Tráiler", f"{ocupacion}%", f"{max(0.0, LARGO_CAMION - ml_con_holgura):.1f} m libres")
 
-    st.subheader("📐 Esquema de Estiba en Planta (Vista Superior)")
+    st.subheader("📐 Esquema de Estiba en Planta (Optimizado)")
     
     fig, ax = plt.subplots(figsize=(12, 3.5))
     ax.add_patch(patches.Rectangle((0, 0), LARGO_CAMION, ANCHO_CAMION, linewidth=2, edgecolor='#333333', facecolor='#F8F9FA'))
@@ -189,7 +239,7 @@ with col_der:
         ax.text(
             b["x"] + b["w_x"]/2, b["y"] + b["h_y"]/2, 
             f"{b['nombre']}{texto_apilado}",
-            color='white', ha='center', va='center', fontsize=6.5, fontweight='bold'
+            color='white', ha='center', va='center', fontsize=6.3, fontweight='bold'
         )
 
     if ml_con_holgura > 0:
