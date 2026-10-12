@@ -5,12 +5,10 @@ import matplotlib.patches as patches
 
 st.set_page_config(page_title="Transporte y Estiba de Eventos", layout="wide", page_icon="🚛")
 
-# Enlace de exportación CSV de la pestaña 'Catálogo de Bultos' de tu Google Sheet
-SHEET_ID = "1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c"
-SHEET_NAME = "Catálogo%20de%20Bultos"
-CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}"
+# Enlace de exportación CSV limpio y directo (no sensible a tildes)
+CSV_URL = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv"
 
-@st.cache_data(ttl=60)  # Recarga datos del Sheet automáticamente cada 60 segundos
+@st.cache_data(ttl=60)
 def cargar_catalogo():
     try:
         df = pd.read_csv(CSV_URL)
@@ -23,12 +21,13 @@ df_catalogo = cargar_catalogo()
 st.title("🚛 Gestor de Transporte y Estiba de Eventos")
 
 if df_catalogo is None:
-    st.error("⚠️ No se pudo conectar con el Catálogo en Google Sheets. Revisa que el enlace tenga permiso de lectura público.")
+    st.error("⚠️ Error temporal al leer Google Sheets. Reintentando...")
 else:
     st.success("☁️ Sincronizado en tiempo real con tu Catálogo de Google Drive.")
 
-# Distribución en dos columnas
 col_izq, col_der = st.columns([1, 2])
+
+cantidades = {}
 
 with col_izq:
     st.subheader("📄 Carga de Albarán")
@@ -38,18 +37,16 @@ with col_izq:
 
     st.subheader("📋 Dotación de Material")
     
-    cantidades = {}
     if df_catalogo is not None:
-        # Generar un selector dinámico para cada bulto definido en tu Google Sheet
         for idx, row in df_catalogo.iterrows():
             nombre = str(row.get("Descripción / Unidad Logística", f"Bulto {idx+1}"))
             codigo = str(row.get("ID / Código", f"B{idx+1}"))
             
-            # Valor por defecto inicial para pruebas
+            # Valor por defecto inicial para ver datos en pantalla
             val_def = 4 if "KSL" in nombre else (3 if "SL-SUB" in nombre or "D80" in nombre else 0)
-            cantidades[codigo] = st.number_input(f"{nombre}", min_value=0, value=val_def, step=1, key=codigo)
+            cantidades[codigo] = st.number_input(nombre, min_value=0, value=val_def, step=1, key=f"inp_{codigo}")
 
-# Cálculos dinámicos basados exclusivamente en las columnas del Google Sheet
+# Cálculos dinámicos basados en la hoja de cálculo
 ml_neto_total = 0.0
 peso_total = 0.0
 
@@ -59,10 +56,15 @@ if df_catalogo is not None:
         cant = cantidades.get(codigo, 0)
         
         if cant > 0:
-            # Leer valores técnicos del Sheet
-            peso_u = float(row.get("Peso Bruto por bulto (kg)", 0))
-            ml_u = float(row.get("ML unitarios por bulto (m)", 0))
-            
+            try:
+                peso_u = float(row.get("Peso Bruto por bulto (kg)", 0))
+            except:
+                peso_u = 0.0
+            try:
+                ml_u = float(row.get("ML unitarios por bulto (m)", 0))
+            except:
+                ml_u = 0.0
+                
             peso_total += cant * peso_u
             ml_neto_total += cant * ml_u
 
@@ -85,22 +87,19 @@ with col_der:
 
     st.subheader("📐 Esquema de Estiba en Camión")
     
-    # Renderizado del tráiler a escala
     fig, ax = plt.subplots(figsize=(11, 3.2))
     truck_width = 2.45
     total_length = 13.60
 
-    # Contorno del semirremolque
     ax.add_patch(patches.Rectangle((0, 0), total_length, truck_width, linewidth=2, edgecolor='#333333', facecolor='#F8F9FA'))
 
-    # Dibujar indicador de carga visual
     if ml_con_holgura > 0:
-        ax.add_patch(patches.Rectangle((0, 0), min(total_length, ml_con_holgura), truck_width, facecolor='#1971C2', alpha=0.15))
-        ax.axvline(x=ml_con_holgura, color='#D6336C', linestyle='--', linewidth=2.5)
-        ax.text(ml_con_holgura + 0.15, 1.22, f"FIN DE CARGA\n{ml_con_holgura:.2f} ML\n({peso_total:,.0f} kg)", 
+        ancho_carga = min(total_length, ml_con_holgura)
+        ax.add_patch(patches.Rectangle((0, 0), ancho_carga, truck_width, facecolor='#1971C2', alpha=0.25))
+        ax.axvline(x=ancho_carga, color='#D6336C', linestyle='--', linewidth=2.5)
+        ax.text(ancho_carga + 0.15, 1.22, f"FIN DE CARGA\n{ml_con_holgura:.2f} ML\n({peso_total:,.0f} kg)", 
                 color='#D6336C', fontsize=8.5, fontweight='bold', va='center')
 
-    # Marcadores de orientación
     ax.text(0.1, truck_width - 0.25, "CABECERA / FRENTE", fontsize=7.5, fontweight='bold', color='#495057')
     ax.text(total_length - 0.2, truck_width - 0.25, "PUERTAS / TRASERA", fontsize=7.5, fontweight='bold', color='#495057', ha='right')
 
