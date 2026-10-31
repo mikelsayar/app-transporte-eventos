@@ -115,7 +115,6 @@ if df_catalogo is not None:
             
             peso_total += cant * peso_u
             
-            # Rotación universal excepto en subs/KSL (por hardware de patín) o consolas Q338 (estiba predefinida)
             puede_rotar = not ("ksl" in nombre.lower() and "bumper" not in nombre.lower()) and not ("sl-sub" in nombre.lower())
             
             if "quantum" in nombre.lower() or "q338" in nombre.lower():
@@ -175,15 +174,14 @@ for it in items_individuales:
 
 # 2. MOTOR DE EMPAQUETADO PURO "BEST-FIT SKYLINE CONTINUO" (TETRIS TOTAL)
 TRUCK_W_CM = 248
+ANCHO_CAMION = 2.48
 LARGO_CAMION = 13.60
 skyline = np.zeros(TRUCK_W_CM, dtype=float) + 3.0
 placed = []
 
-# Apartamos consolas para la trasera (zona de descarga prioritaria)
 consoles = [it for it in pool_items if "q338" in it['name'].lower() or "consola" in it['name'].lower()]
 pool = [it for it in pool_items if it not in consoles]
 
-# Proceso activo de relleno de valles
 while pool:
     min_x = np.min(skyline)
     
@@ -212,7 +210,6 @@ while pool:
     best_cand_y = None
     best_cand_x = None
     
-    # 1. Intentar embutir el mejor bulto posible que quepa íntegro dentro del hueco/valle
     for idx, item in enumerate(pool):
         orientations = [(item['w'], item['d'])]
         if item.get('puede_rotar', True) and item['w'] != item['d']:
@@ -241,8 +238,6 @@ while pool:
         })
         skyline[best_cand_y : best_cand_y + best_cand_w] = best_cand_x + best_cand_d + 1.5
     else:
-        # 2. Si no entra perfecto, probamos absolutamente todas las piezas y giros a lo largo de toda la manga
-        # para elegir el que genere el menor avance hacia la trasera (menor X resultante).
         min_new_x = float('inf')
         fallback_idx = None
         f_y, f_w, f_d, f_x = None, None, None, None
@@ -278,9 +273,6 @@ while pool:
         else:
             break
 
-# 3. Colocar consolas Q338 a lo ancho (transversal 165x65)
-# El algoritmo continuará evaluando el lateral de 83 cm libre que queda al lado de ellas
-# por si sobraron baúles u otros ítems al final.
 for c in consoles:
     cur_c_x = np.max(skyline[0 : c['w']])
     placed.append({
@@ -308,7 +300,7 @@ with col_der:
     ocupacion = min(100, int((ml_con_holgura / LARGO_CAMION) * 100))
     m4.metric("Ocupación Tráiler", f"{ocupacion}%", f"{max(0.0, LARGO_CAMION - ml_con_holgura):.1f} m libres")
 
-    st.subheader("📐 Esquema de Estiba en Planta (Carga Continua Optimizada)")
+    st.subheader("📐 Esquema de Estiba en Planta (Contacto Directo Optimizado)")
     
     fig, ax = plt.subplots(figsize=(13, 3.8))
     ax.add_patch(patches.Rectangle((0, 0), LARGO_CAMION, ANCHO_CAMION, linewidth=2, edgecolor='#333333', facecolor='#F8F9FA'))
