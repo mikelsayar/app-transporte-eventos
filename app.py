@@ -77,10 +77,10 @@ with col_izq:
             nombre = str(row.get("Descripción / Unidad Logística", f"Bulto {idx+1}"))
             codigo = str(row.get("ID / Código", f"B{idx+1}"))
             
-            val_def = 5 if "KSL" in nombre and "Bumper" not in nombre else (3 if "SL-SUB" in nombre else (1 if "Bumper" in nombre else (2 if "Motores" in nombre else (3 if "D80" in nombre else (2 if "D40" in nombre else (5 if "120x60" in nombre else (1 if "80x60" in nombre else (2 if "Quantum" in nombre else 0))))))))
+            val_def = 5 if "KSL" in nombre and "Bumper" not in nombre else (3 if "SL-SUB" in nombre else (0 if "Bumper" in nombre else (2 if "Motores" in nombre else (3 if "D80" in nombre else (2 if "D40" in nombre else (5 if "120x60" in nombre else (1 if "80x60" in nombre else (2 if "Quantum" in nombre else 0))))))))
             cantidades[codigo] = st.number_input(nombre, min_value=0, value=val_def, step=1, key=f"inp_{codigo}")
 
-# 1. GENERACIÓN DE HUELLAS Y APILADO VERTICAL
+# 1. HUELLAS Y APILADO VERTICAL
 peso_total = 0.0
 compat_pools = defaultdict(list)
 items_individuales = []
@@ -156,7 +156,7 @@ for it in items_individuales:
         "puede_rotar": it["puede_rotar"]
     })
 
-# 2. MOTOR DE EMPAQUETADO ÓPTIMO (COMBINACIÓN DE PICOS Y PAREJAS)
+# 2. MOTOR DE ESTIBA COMPACTA CONTINUA (COMPENSACIÓN DE PICOS)
 ANCHO_CAMION = 2.48
 LARGO_CAMION = 13.60
 
@@ -172,7 +172,7 @@ bultos_especiales = [h for h in huellas_suelo if h not in bultos_60 and h not in
 placed = []
 cur_x = 0.03
 
-# Prioridad: Líneas homogéneas de KSL completos en cabecera
+# Cabecera: Líneas homogéneas de 4 KSL
 ksl_puros = [b for b in bultos_60 if "KSL" in b['nombre']]
 otros_60 = [b for b in bultos_60 if "KSL" not in b['nombre']]
 
@@ -185,7 +185,10 @@ while len(ksl_puros) >= 4:
         cur_y += b['ancho'] + 0.01
     cur_x += 1.00 + 0.02
 
-# Bultos anchos (SL-SUB, Bumpers, Motores) en parejas de 2 a lo ancho
+resto_60 = ksl_puros + otros_60
+resto_60.sort(key=lambda x: -x['fondo'])
+
+# Parejas completas de bultos anchos (SL-SUB, Motores)
 bultos_110.sort(key=lambda x: -x['fondo'])
 while len(bultos_110) >= 2:
     pareja = [bultos_110.pop(0), bultos_110.pop(0)]
@@ -194,15 +197,22 @@ while len(bultos_110) >= 2:
     placed.append({'x': cur_x, 'y': 1.24, 'w_x': pareja[1]['fondo'], 'h_y': pareja[1]['ancho'], 'nombre': pareja[1]['nombre'], 'color': pareja[1]['color'], 'peso': pareja[1]['peso'], 'alturas': pareja[1]['alturas']})
     cur_x += max_d + 0.02
 
+# Bulto ancho desparejado: se completa la calle con dos bultos de 60 cm al lado
 if len(bultos_110) == 1:
-    b = bultos_110.pop(0)
-    placed.append({'x': cur_x, 'y': 0.02, 'w_x': b['fondo'], 'h_y': b['ancho'], 'nombre': b['nombre'], 'color': b['color'], 'peso': b['peso'], 'alturas': b['alturas']})
-    cur_x += b['fondo'] + 0.02
+    odd_double = bultos_110.pop(0)
+    placed.append({'x': cur_x, 'y': 0.02, 'w_x': odd_double['fondo'], 'h_y': odd_double['ancho'], 'nombre': odd_double['nombre'], 'color': odd_double['color'], 'peso': odd_double['peso'], 'alturas': odd_double['alturas']})
+    
+    cur_y_side = 1.24
+    depths_in_row = [odd_double['fondo']]
+    for _ in range(min(2, len(resto_60))):
+        it60 = resto_60.pop(0)
+        placed.append({'x': cur_x, 'y': cur_y_side, 'w_x': it60['fondo'], 'h_y': it60['ancho'], 'nombre': it60['nombre'], 'color': it60['color'], 'peso': it60['peso'], 'alturas': it60['alturas']})
+        depths_in_row.append(it60['fondo'])
+        cur_y_side += it60['ancho'] + 0.01
+        
+    cur_x += max(depths_in_row) + 0.02
 
-# Agrupar el KSL restante con los racks y baúles de 60 cm en filas de 4
-resto_60 = ksl_puros + otros_60
-resto_60.sort(key=lambda x: -x['fondo'])
-
+# Líneas completas de 4 unidades de 60 cm
 while len(resto_60) >= 4 and (len(resto_60) > len(bultos_especiales) or len(bultos_especiales) == 0):
     fila_4 = [resto_60.pop(0) for _ in range(4)]
     max_d = max(item['fondo'] for item in fila_4)
@@ -212,7 +222,7 @@ while len(resto_60) >= 4 and (len(resto_60) > len(bultos_especiales) or len(bult
         cur_y += b['ancho'] + 0.01
     cur_x += max_d + 0.02
 
-# Bultos especiales (consolas Q338) combinados con los baúles restantes en el lateral
+# Consolas Q338 en trasera con material de 60 cm acoplado al lateral
 for esp in bultos_especiales:
     placed.append({'x': cur_x, 'y': 0.02, 'w_x': esp['fondo'], 'h_y': esp['ancho'], 'nombre': esp['nombre'], 'color': esp['color'], 'peso': esp['peso'], 'alturas': esp['alturas']})
     if resto_60:
