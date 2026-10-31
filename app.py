@@ -50,6 +50,7 @@ COLORES_CAT = {
     "Varios": "#6C757D"
 }
 
+# Secuencia física de carga hacia la cabecera (cargas pesadas primero)
 ORDEN_CARGA_CAT = {
     "PA / Cajas": 1,
     "Subgraves": 2,
@@ -90,10 +91,11 @@ with col_izq:
             nombre = str(row.get("Descripción / Unidad Logística", f"Bulto {idx+1}"))
             codigo = str(row.get("ID / Código", f"B{idx+1}"))
             
-            val_def = 4 if "KSL" in nombre and "Bumper" not in nombre else (2 if "SL-SUB" in nombre else (3 if "D80" in nombre else (1 if "D40" in nombre else 0)))
+            # Valores por defecto para comprobar la estiba
+            val_def = 4 if "KSL" in nombre and "Bumper" not in nombre else (3 if "SL-SUB" in nombre else (1 if "Bumper" in nombre else (3 if "D80" in nombre else (2 if "D40" in nombre else (5 if "120x60" in nombre else 0)))))
             cantidades[codigo] = st.number_input(nombre, min_value=0, value=val_def, step=1, key=f"inp_{codigo}")
 
-# 1. AGRUPACIÓN INTELIGENTE DE BULTOS COMPATIBLES (INTER-STACKING VERTICAL)
+# 1. AGRUPACIÓN Y REMONTABILIDAD VERTICAL (INTER-STACKING)
 peso_total = 0.0
 compat_pools = defaultdict(list)
 items_individuales = []
@@ -129,7 +131,6 @@ if df_catalogo is not None:
                 "puede_rotar": puede_rotar
             }
 
-            # Si es remontable (>1 altura), va al pool común de compatibilidad de esa familia y medidas
             if max_stack > 1:
                 key_compat = (categoria, ancho_m, fondo_m, max_stack)
                 for _ in range(cant):
@@ -140,7 +141,7 @@ if df_catalogo is not None:
 
 huellas_suelo = []
 
-# Procesar pools de bultos remontables compatibles
+# Resolver torres de bultos remontables compatibles
 for key, units in compat_pools.items():
     cat, ancho_m, fondo_m, max_stack = key
     while units:
@@ -165,7 +166,6 @@ for key, units in compat_pools.items():
             "puede_rotar": torre[0]["puede_rotar"]
         })
 
-# Añadir bultos no remontables (1 altura)
 for it in items_individuales:
     huellas_suelo.append({
         "nombre": it["alias"],
@@ -178,72 +178,86 @@ for it in items_individuales:
         "puede_rotar": it["puede_rotar"]
     })
 
-# 2. MOTOR DE ESTIBA: LÍNEAS COMPLETAS POR HUELLA + PICOS AL FINAL
+# 2. MOTOR DE ESTIBA TOURING CONTINUA (4 CARRILES INDEPENDIENTES SIN CORTES GLOBALES)
 ANCHO_CAMION = 2.48
 LARGO_CAMION = 13.60
 
-groups = defaultdict(list)
-for it in huellas_suelo:
-    groups[(it['categoria'], it['ancho'], it['fondo'])].append(it)
+lane_y = [0.02, 0.625, 1.23, 1.835]
+lane_x = [0.03, 0.03, 0.03, 0.03]
 
-lineas_completas = []
-picos = []
+# Normalizar rotación de baúles para ajustarse a los 60cm de carril si es posible
+for h in huellas_suelo:
+    if h.get("puede_rotar", False):
+        if 0.55 <= h["fondo"] <= 0.65 and not (0.55 <= h["ancho"] <= 0.65):
+            h["ancho"], h["fondo"] = h["fondo"], h["ancho"]
 
-for key, item_group in groups.items():
-    cat, ancho, fondo = key
-    max_a_lo_ancho = int(ANCHO_CAMION // ancho)
-    
-    while len(item_group) >= max_a_lo_ancho and max_a_lo_ancho > 0:
-        lineas_completas.append((cat, fondo, item_group[:max_a_lo_ancho]))
-        item_group = item_group[max_a_lo_ancho:]
-    picos.extend(item_group)
-
-lineas_completas.sort(key=lambda x: (ORDEN_CARGA_CAT.get(x[0], 10), -x[1]))
+# Ordenar por familias pesadas y ancho
+huellas_suelo.sort(key=lambda x: (ORDEN_CARGA_CAT.get(x['categoria'], 10), -x['ancho'], -x['fondo']))
 
 placed = []
-cur_x = 0.03
+items_especiales = []
 
-# Colocar primero las líneas maestras completas
-for cat, fondo_linea, line_items in lineas_completas:
-    cur_y = 0.02
-    for it in line_items:
-        placed.append({
-            'x': cur_x, 'y': cur_y, 'w_x': it['fondo'], 'h_y': it['ancho'],
-            'nombre': it['nombre'], 'color': it['color'], 'alturas': it['alturas']
-        })
-        cur_y += it['ancho'] + 0.005
-    cur_x += fondo_linea + 0.02
-
-# Colocar los bultos sueltos / restos al final
-picos.sort(key=lambda x: (ORDEN_CARGA_CAT.get(x['categoria'], 10), -x['fondo'], -x['ancho']))
-
-while picos:
-    seed = picos.pop(0)
-    calle = [seed]
-    rem_w = ANCHO_CAMION - seed['ancho'] - 0.01
+for it in huellas_suelo:
+    w = it['ancho']
+    d = it['fondo']
     
-    i = 0
-    while i < len(picos) and rem_w >= 0.35:
-        if picos[i]['ancho'] <= rem_w + 0.01:
-            calle.append(picos.pop(i))
-            rem_w -= (calle[-1]['ancho'] + 0.005)
-        elif picos[i].get('puede_rotar', False) and (picos[i]['fondo'] <= rem_w + 0.01):
-            rot = dict(picos.pop(i))
-            rot['ancho'], rot['fondo'] = rot['fondo'], rot['ancho']
-            calle.append(rot)
-            rem_w -= (rot['ancho'] + 0.005)
+    # Bultos anchos (110 - 135 cm): cubren 2 carriles contiguos (0+1 o 2+3)
+    if 1.00 <= w <= 1.35:
+        front_01 = max(lane_x[0], lane_x[1])
+        front_23 = max(lane_x[2], lane_x[3])
+        
+        if front_01 <= front_23:
+            chosen_x = front_01
+            chosen_y = lane_y[0]
+            new_x = chosen_x + d + 0.015
+            lane_x[0] = new_x
+            lane_x[1] = new_x
         else:
-            i += 1
+            chosen_x = front_23
+            chosen_y = lane_y[2]
+            new_x = chosen_x + d + 0.015
+            lane_x[2] = new_x
+            lane_x[3] = new_x
             
-    cur_y = 0.02
-    max_f = max(it['fondo'] for it in calle)
-    for it in calle:
         placed.append({
-            'x': cur_x, 'y': cur_y, 'w_x': it['fondo'], 'h_y': it['ancho'],
-            'nombre': it['nombre'], 'color': it['color'], 'alturas': it['alturas']
+            'x': chosen_x, 'y': chosen_y, 'w_x': d, 'h_y': w,
+            'nombre': it['nombre'], 'color': it['color'], 'peso': it['peso'], 'alturas': it['alturas']
         })
-        cur_y += it['ancho'] + 0.005
-    cur_x += max_f + 0.02
+        
+    # Bultos modulares de 60 cm (50 - 65 cm): van al carril con el hueco más libre/adelantado
+    elif 0.50 <= w <= 0.65:
+        best_lane = lane_x.index(min(lane_x))
+        chosen_x = lane_x[best_lane]
+        chosen_y = lane_y[best_lane]
+        
+        new_x = chosen_x + d + 0.015
+        lane_x[best_lane] = new_x
+        
+        placed.append({
+            'x': chosen_x, 'y': chosen_y, 'w_x': d, 'h_y': w,
+            'nombre': it['nombre'], 'color': it['color'], 'peso': it['peso'], 'alturas': it['alturas']
+        })
+    else:
+        items_especiales.append(it)
+
+# Bultos especiales no estándar (al final hacia las puertas)
+end_x = max(lane_x) if placed else 0.03
+cur_y = 0.02
+max_d_spec = 0.0
+for it in items_especiales:
+    w = it['ancho']
+    d = it['fondo']
+    if cur_y + w > ANCHO_CAMION + 0.01:
+        end_x += max_d_spec + 0.02
+        cur_y = 0.02
+        max_d_spec = 0.0
+    placed.append({
+        'x': end_x, 'y': cur_y, 'w_x': d, 'h_y': w,
+        'nombre': it['nombre'], 'color': it['color'], 'peso': it['peso'], 'alturas': it['alturas']
+    })
+    cur_y += w + 0.01
+    if d > max_d_spec:
+        max_d_spec = d
 
 total_ml = max([p['x'] + p['w_x'] for p in placed]) if placed else 0.0
 ml_con_holgura = total_ml * 1.05
@@ -276,7 +290,7 @@ with col_der:
         )
         ax.add_patch(rect)
         
-        texto_alt = f"\n({b['alturas']} alt)" if b['alturas'] > 1 else ""
+        texto_alt = f"\n({b['alturas']} alt)" if b['alturas'] > 1 and "alt" not in b['nombre'] else ""
         ax.text(
             b["x"] + b["w_x"]/2, b["y"] + b["h_y"]/2, 
             f"{b['nombre']}{texto_alt}", color='white', ha='center', va='center', fontsize=7.2, fontweight='bold'
