@@ -66,6 +66,20 @@ def obtener_alias(n):
     if "motor" in nl: return "Motores"
     return n[:10]
 
+def clasificar_familia(alias, categoria):
+    al = alias.lower()
+    if "sl-sub" in al or "sub" in categoria.lower():
+        return "SUB"
+    if "ksl" in al and "bumper" not in al:
+        return "PA"
+    if "motor" in al or "bumper" in al or "rigging" in categoria.lower():
+        return "RIG"
+    if any(x in al for x in ["d80", "d40", "d90", "d25"]) or "amplif" in categoria.lower():
+        return "AMP"
+    if "q338" in al or "control" in categoria.lower():
+        return "FOH"
+    return "CAB"
+
 with col_izq:
     st.subheader("📄 Carga de Albarán")
     archivo = st.file_uploader("Arrastra el albarán técnico (PDF / Imagen)", type=["pdf", "png", "jpg", "jpeg"])
@@ -79,7 +93,7 @@ with col_izq:
             codigo = str(row.get("ID / Código", f"B{idx+1}"))
             
             val_def = 5 if "KSL" in nombre and "Bumper" not in nombre else (
-                3 if "SL-SUB" in nombre else (
+                4 if "SL-SUB" in nombre else (
                     2 if "Motores" in nombre else (
                         2 if "D80" in nombre else (
                             3 if "D40" in nombre else (
@@ -114,24 +128,36 @@ if df_catalogo is not None:
             max_stack = max(1, int(parse_num(row.get("Alturas de apilado", 1))))
             
             peso_total += cant * peso_u
-            
-            # Todo el material modular puede rotar, excepto los KSL o subs cuyo patín dicte lo contrario
-            puede_rotar = not ("ksl" in nombre.lower() and "bumper" not in nombre.lower()) and not ("sl-sub" in nombre.lower())
-            
-            if "quantum" in nombre.lower() or "q338" in nombre.lower():
+            alias = obtener_alias(nombre)
+            fam = clasificar_familia(alias, categoria)
+
+            # Normalizar medidas clave según realidad de gira
+            if fam == "SUB":
+                ancho_cm, fondo_cm = 110, 130
                 puede_rotar = False
+            elif fam == "PA":
+                ancho_cm, fondo_cm = 60, 100
+                puede_rotar = False
+            elif fam == "FOH":
                 ancho_cm, fondo_cm = 165, 65
+                puede_rotar = True
+            else:
+                # Si es un baúl de 80x60, su orientación base modular es 60 de ancho x 80 de fondo
+                if (ancho_cm == 80 and fondo_cm == 60):
+                    ancho_cm, fondo_cm = 60, 80
+                puede_rotar = True
 
             item_info = {
                 "nombre": nombre,
-                "alias": obtener_alias(nombre),
+                "alias": alias,
+                "familia": fam,
                 "categoria": categoria,
                 "w": ancho_cm,
                 "d": fondo_cm,
                 "peso": peso_u,
                 "max_stack": max_stack,
                 "color": COLORES_CAT.get(categoria, "#495057"),
-                "puede_rotar": puede_rotar
+                "rot": puede_rotar
             }
 
             if max_stack > 1:
@@ -152,141 +178,178 @@ for key, units in compat_pools.items():
         lbl_parts = [f"{cnt}x {k}" if cnt > 1 else k for k, cnt in counts.items()]
         pool_items.append({
             "name": " / ".join(lbl_parts),
-            "categoria": cat,
+            "cat": torre[0]["familia"],
             "w": w_cm,
             "d": d_cm,
             "color": torre[0]["color"],
             "peso": sum(u["peso"] for u in torre),
             "alt": len(torre),
-            "puede_rotar": torre[0]["puede_rotar"]
+            "rot": torre[0]["rot"]
         })
 
 for it in items_individuales:
     pool_items.append({
         "name": it["alias"],
-        "categoria": it["categoria"],
+        "cat": it["familia"],
         "w": it["w"],
         "d": it["d"],
         "color": it["color"],
         "peso": it["peso"],
         "alt": 1,
-        "puede_rotar": it["puede_rotar"]
+        "rot": it["rot"]
     })
 
-# 2. MOTOR DE EMPAQUETADO PURO "BEST-FIT SKYLINE CONTINUO" (TETRIS TOTAL)
+# 2. MOTOR SKYLINE CON CIERRE AUTOMÁTICO DE RENDIJAS RESIDUALES
 TRUCK_W_CM = 248
 ANCHO_CAMION = 2.48
 LARGO_CAMION = 13.60
-skyline = np.zeros(TRUCK_W_CM, dtype=float) + 3.0
-placed = []
 
-consoles = [it for it in pool_items if "q338" in it['name'].lower() or "consola" in it['name'].lower()]
-pool = [it for it in pool_items if it not in consoles]
+def ejecutar_skyline(items_entrada, orden_familias, permitir_rotar_60=False, permitir_rotar_consolas=False):
+    skyline = np.zeros(TRUCK_W_CM, dtype=float) + 3.0
+    placed = []
+    pool = [dict(it) for it in items_entrada]
+    pool.sort(key=lambda it: (orden_familias.get(it["cat"], 9), -it["d"], -it["w"]))
 
-while pool:
-    min_x = np.min(skyline)
-    
-    valleys = []
-    in_v = False
-    v_s = 0
-    for i in range(TRUCK_W_CM):
-        if abs(skyline[i] - min_x) <= 2.0:
-            if not in_v:
-                in_v = True
-                v_s = i
-        else:
+    while pool:
+        min_w_pool = min(
+            min(it["w"], it["d"]) if (
+                it.get("rot", False)
+                and (permitir_rotar_60 or it["w"] != 60)
+                and (permitir_rotar_consolas or it["cat"] != "FOH")
+            ) else it["w"]
+            for it in pool
+        )
+
+        # Cierre de rendijas estrechas donde ya no cabe ningún bulto (Valley Raising)
+        while True:
+            min_x = np.min(skyline)
+            valleys = []
+            in_v = False
+            v_s = 0
+            for i in range(TRUCK_W_CM):
+                if skyline[i] <= min_x + 1.5:
+                    if not in_v:
+                        in_v = True
+                        v_s = i
+                else:
+                    if in_v:
+                        valleys.append((v_s, i - v_s))
+                        in_v = False
             if in_v:
-                valleys.append((v_s, i - v_s))
-                in_v = False
-    if in_v:
-        valleys.append((v_s, TRUCK_W_CM - v_s))
-        
-    valleys.sort(key=lambda v: -v[1])
-    target_v_start, target_v_len = valleys[0]
-    
-    best_cand_idx = None
-    best_cand_w = None
-    best_cand_d = None
-    best_cand_score = -float('inf')
-    best_cand_y = None
-    best_cand_x = None
-    
-    for idx, item in enumerate(pool):
-        orientations = [(item['w'], item['d'])]
-        if item.get('puede_rotar', True) and item['w'] != item['d']:
-            orientations.append((item['d'], item['w']))
-            
-        for (w_cm, d_cm) in orientations:
-            if w_cm <= target_v_len:
-                width_fill_ratio = w_cm / target_v_len
-                area = w_cm * d_cm
-                score = (width_fill_ratio * 1000) + area
-                
-                if score > best_cand_score:
-                    best_cand_score = score
-                    best_cand_idx = idx
-                    best_cand_w = w_cm
-                    best_cand_d = d_cm
-                    best_cand_y = target_v_start
-                    best_cand_x = np.max(skyline[best_cand_y : best_cand_y + best_cand_w])
-                    
-    if best_cand_idx is not None:
-        it = pool.pop(best_cand_idx)
-        placed.append({
-            'name': it['name'], 'color': it['color'], 'alt': it.get('alt', 1),
-            'x': best_cand_x / 100.0, 'y': best_cand_y / 100.0,
-            'w_x': best_cand_d / 100.0, 'h_y': best_cand_w / 100.0
-        })
-        skyline[best_cand_y : best_cand_y + best_cand_w] = best_cand_x + best_cand_d + 1.5
-    else:
-        min_new_x = float('inf')
-        fallback_idx = None
-        f_y, f_w, f_d, f_x = None, None, None, None
-        
-        for idx, item in enumerate(pool):
-            orientations = [(item['w'], item['d'])]
-            if item.get('puede_rotar', True) and item['w'] != item['d']:
-                orientations.append((item['d'], item['w']))
-                
+                valleys.append((v_s, TRUCK_W_CM - v_s))
+
+            valleys.sort(key=lambda v: (-v[1], v[0]))
+            v_start, v_len = valleys[0]
+
+            if v_len < min_w_pool:
+                left_x = skyline[v_start - 1] if v_start > 0 else float("inf")
+                right_x = skyline[v_start + v_len] if (v_start + v_len) < TRUCK_W_CM else float("inf")
+                raise_to = min(left_x, right_x)
+                if raise_to == float("inf") or raise_to <= min_x:
+                    raise_to = min_x + 5.0
+                skyline[v_start : v_start + v_len] = raise_to
+            else:
+                break
+
+        best_idx = None
+        best_w, best_d, best_y, best_x = None, None, None, None
+        best_score = -float("inf")
+
+        for idx, it in enumerate(pool):
+            can_rot = it.get("rot", False)
+            if it["w"] == 60 and not permitir_rotar_60:
+                can_rot = False
+            if it["cat"] == "FOH" and not permitir_rotar_consolas:
+                can_rot = False
+
+            orientations = [(it["w"], it["d"])]
+            if can_rot and it["w"] != it["d"]:
+                orientations.append((it["d"], it["w"]))
+
             for (w_cm, d_cm) in orientations:
-                if w_cm > TRUCK_W_CM: continue
-                for y_cand in range(0, TRUCK_W_CM - w_cm + 1, 5):
-                    cur_x = np.max(skyline[y_cand : y_cand + w_cm])
-                    new_x = cur_x + d_cm
-                    
-                    if new_x < min_new_x - 0.5:
-                        min_new_x = new_x
-                        fallback_idx = idx
-                        f_y, f_w, f_d, f_x = y_cand, w_cm, d_cm, cur_x
-                    elif abs(new_x - min_new_x) <= 0.5:
-                        if (w_cm * d_cm) > (f_w * f_d if f_w else 0):
-                            fallback_idx = idx
-                            f_y, f_w, f_d, f_x = y_cand, w_cm, d_cm, cur_x
-                            
-        if fallback_idx is not None:
-            it = pool.pop(fallback_idx)
-            placed.append({
-                'name': it['name'], 'color': it['color'], 'alt': it.get('alt', 1),
-                'x': f_x / 100.0, 'y': f_y / 100.0,
-                'w_x': f_d / 100.0, 'h_y': f_w / 100.0
-            })
-            skyline[f_y : f_y + f_w] = f_x + f_d + 1.5
-        else:
-            break
+                if w_cm <= v_len:
+                    rem = v_len - w_cm
+                    queue_prio = (len(pool) - idx) * 300
 
-for c in consoles:
-    cur_c_x = np.max(skyline[0 : c['w']])
-    placed.append({
-        'name': c['name'], 'color': c['color'], 'alt': c.get('alt', 1),
-        'x': cur_c_x / 100.0, 'y': 0.02,
-        'w_x': c['d'] / 100.0, 'h_y': c['w'] / 100.0
-    })
-    skyline[0 : c['w']] = cur_c_x + c['d'] + 1.5
+                    # Premiar encajes que dejen hueco para otro módulo (>=min_w_pool) o cierren calle (<=28 cm)
+                    if rem >= min_w_pool or rem <= 28:
+                        mod_bonus = 2000 - (rem * 10 if rem < min_w_pool else 0)
+                    else:
+                        mod_bonus = -5000
 
-total_ml = max([p['x'] + p['w_x'] for p in placed]) if placed else 0.0
-ml_con_holgura = total_ml * 1.05
+                    cand_y = v_start
+                    cand_x = np.max(skyline[cand_y : cand_y + w_cm])
+                    new_front = cand_x + d_cm + 1.5
+
+                    level_bonus = 0
+                    if cand_y > 0 and abs(skyline[cand_y - 1] - new_front) <= 4.0:
+                        level_bonus = 1500
+
+                    orig_bonus = 400 if w_cm == it["w"] else 0
+
+                    score = queue_prio + mod_bonus + level_bonus + orig_bonus
+                    if score > best_score:
+                        best_score = score
+                        best_idx = idx
+                        best_w, best_d, best_y, best_x = w_cm, d_cm, cand_y, cand_x
+
+        if best_idx is None:
+            left_x = skyline[v_start - 1] if v_start > 0 else float("inf")
+            right_x = skyline[v_start + v_len] if (v_start + v_len) < TRUCK_W_CM else float("inf")
+            raise_to = min(left_x, right_x)
+            if raise_to == float("inf") or raise_to <= min_x:
+                raise_to = min_x + 5.0
+            skyline[v_start : v_start + v_len] = raise_to
+            continue
+
+        it = pool.pop(best_idx)
+        placed.append({
+            "name": it["name"],
+            "color": it["color"],
+            "alt": it["alt"],
+            "x": best_x / 100.0,
+            "y": best_y / 100.0,
+            "w_x": best_d / 100.0,
+            "h_y": best_w / 100.0,
+        })
+        skyline[best_y : best_y + best_w] = best_x + d_cm + 1.5
+
+    total_ml = max([p["x"] + p["w_x"] for p in placed]) if placed else 0.0
+    return placed, total_ml
 
 with col_der:
+    modo_estiba = st.radio(
+        "🎯 Estrategia de ubicación de Subgraves (SL-SUB) y optimización:",
+        [
+            "Automático (Mínimos Metros Lineales)",
+            "SL-SUB al Fondo Interior (Cabecera)",
+            "SL-SUB al Final (Puertas / Trasera)"
+        ],
+        horizontal=True
+    )
+
+    candidatos = []
+    if modo_estiba == "SL-SUB al Fondo Interior (Cabecera)":
+        candidatos.append(ejecutar_skyline(pool_items, {"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "FOH": 5, "CAB": 6}, False, False))
+        candidatos.append(ejecutar_skyline(pool_items, {"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "CAB": 5, "FOH": 6}, False, True))
+    elif modo_estiba == "SL-SUB al Final (Puertas / Trasera)":
+        candidatos.append(ejecutar_skyline(pool_items, {"PA": 1, "RIG": 2, "AMP": 3, "FOH": 4, "CAB": 5, "SUB": 6}, False, False))
+        candidatos.append(ejecutar_skyline(pool_items, {"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "FOH": 5, "SUB": 6}, False, True))
+    else:
+        # Evalúa todas las configuraciones lógicas y elige la más corta en metros lineales
+        ordenes = [
+            ({"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "FOH": 5, "CAB": 6}, False, False),
+            ({"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "CAB": 5, "FOH": 6}, False, True),
+            ({"PA": 1, "RIG": 2, "AMP": 3, "FOH": 4, "CAB": 5, "SUB": 6}, False, False),
+            ({"PA": 1, "AMP": 2, "CAB": 3, "FOH": 4, "SUB": 5, "RIG": 6}, False, True),
+            ({"RIG": 1, "CAB": 2, "PA": 3, "SUB": 4, "FOH": 5, "AMP": 6}, False, True),
+        ]
+        for ord_map, r60, rcon in ordenes:
+            candidatos.append(ejecutar_skyline(pool_items, ord_map, r60, rcon))
+
+    placed, total_ml = min(candidatos, key=lambda x: x[1]) if candidatos else ([], 0.0)
+    ml_con_holgura = total_ml * 1.05
+
     st.subheader("📊 Resumen Logístico de Carga")
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Metros Lineales (Fondo)", f"{ml_con_holgura:.2f} ML", f"Neto: {total_ml:.2f} m")
@@ -322,7 +385,7 @@ with col_der:
 
     if ml_con_holgura > 0:
         ax.axvline(x=ml_con_holgura, color='#D6336C', linestyle='--', linewidth=2.5)
-        ax.text(ml_con_holgura + 0.15, 1.24, f"FIN DE CARGA\n{ml_con_holgura:.2f} ML", 
+        ax.text(ml_con_holgura + 0.15, 1.24, f"FIN DE CARGA\n{ml_con_holgura:.2f} ML\n(Neto: {total_ml:.2f} m)", 
                 color='#D6336C', fontsize=8.5, fontweight='bold', va='center')
 
     ax.text(0.1, ANCHO_CAMION + 0.12, "FRENTE / CABECERA", fontsize=8.5, fontweight='bold', color='#1971C2')
