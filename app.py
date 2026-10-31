@@ -30,9 +30,9 @@ df_catalogo = cargar_catalogo()
 st.title("🚛 Gestor de Transporte y Estiba de Eventos")
 
 if df_catalogo is None:
-    st.error("⚠️ Error temporal al leer Google Sheets. Reintentando...")
+    st.error("⚠️ Error de conexión con Google Sheets. Reintentando...")
 else:
-    st.success("☁️ Sincronizado en tiempo real con tu Catálogo de Google Drive.")
+    st.success("☁️ Sincronizado en tiempo real con Google Sheets.")
 
 col_izq, col_der = st.columns([1, 2])
 cantidades = {}
@@ -48,6 +48,20 @@ COLORES_CAT = {
     "Cableado": "#495057",
     "Cableado / Accesorios": "#495057",
     "Varios": "#6C757D"
+}
+
+# Prioridad por masa/estabilidad (pesado hacia cabecera)
+ORDEN_ESTABILIDAD = {
+    "PA / Cajas": 1,
+    "Subgraves": 2,
+    "Rigging / Motores": 3,
+    "Rigging / Estructura": 4,
+    "Amplificación": 5,
+    "Cableado": 6,
+    "Cableado / Accesorios": 6,
+    "Monitores": 7,
+    "Control / FOH": 8,
+    "Varios": 9
 }
 
 def obtener_alias(n):
@@ -67,9 +81,9 @@ def obtener_alias(n):
 
 with col_izq:
     st.subheader("📄 Carga de Albarán")
-    archivo = st.file_uploader("Arrastra el PDF o foto del albarán", type=["pdf", "png", "jpg", "jpeg"])
+    archivo = st.file_uploader("Arrastra el albarán (PDF/Imagen)", type=["pdf", "png", "jpg", "jpeg"])
     if archivo:
-        st.info(f"Albarán recibido: {archivo.name}")
+        st.info(f"Albarán cargado: {archivo.name}")
 
     st.subheader("📋 Dotación de Material")
     if df_catalogo is not None:
@@ -77,10 +91,25 @@ with col_izq:
             nombre = str(row.get("Descripción / Unidad Logística", f"Bulto {idx+1}"))
             codigo = str(row.get("ID / Código", f"B{idx+1}"))
             
-            val_def = 5 if "KSL" in nombre and "Bumper" not in nombre else (3 if "SL-SUB" in nombre else (0 if "Bumper" in nombre else (2 if "Motores" in nombre else (3 if "D80" in nombre else (2 if "D40" in nombre else (5 if "120x60" in nombre else (1 if "80x60" in nombre else (2 if "Quantum" in nombre else 0))))))))
+            # Cantidades base correspondientes a la captura analizada
+            val_def = 4 if "KSL" in nombre and "Bumper" not in nombre else (
+                3 if "SL-SUB" in nombre else (
+                    2 if "Motores" in nombre else (
+                        2 if "D80" in nombre else (
+                            3 if "D40" in nombre else (
+                                5 if "120x60" in nombre else (
+                                    1 if "80x60" in nombre else (
+                                        2 if "Quantum" in nombre else 0
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
             cantidades[codigo] = st.number_input(nombre, min_value=0, value=val_def, step=1, key=f"inp_{codigo}")
 
-# 1. HUELLAS Y APILADO VERTICAL
+# 1. HUELLAS FÍSICAS Y APILADO VERTICAL COMPARTIDO
 peso_total = 0.0
 compat_pools = defaultdict(list)
 items_individuales = []
@@ -102,7 +131,8 @@ if df_catalogo is not None:
             fondo_m = round(max(0.30, fondo_cm / 100.0), 2)
             peso_total += cant * peso_u
             
-            puede_rotar = ("baúl" in nombre.lower()) or ("baul" in nombre.lower()) or ("cables" in nombre.lower())
+            # Elementos orientables dinámicamente según hueco disponible
+            puede_rotar = any(k in nombre.lower() for k in ["baúl", "baul", "cables", "quantum", "digico"])
 
             item_info = {
                 "nombre": nombre,
@@ -156,86 +186,63 @@ for it in items_individuales:
         "puede_rotar": it["puede_rotar"]
     })
 
-# 2. MOTOR DE ESTIBA COMPACTA CONTINUA (COMPENSACIÓN DE PICOS)
+# 2. MOTOR DE EMPAQUETADO CONTINUO SIN LÍNEAS FIJAS ("SKYLINE")
 ANCHO_CAMION = 2.48
 LARGO_CAMION = 13.60
+PASO_Y = 0.05  # Resolución de 5 cm a lo ancho
+n_slots = int(ANCHO_CAMION / PASO_Y)
+skyline = [0.03] * n_slots  # Perfil de avance longitudinal por franja
 
-for h in huellas_suelo:
-    if h.get("puede_rotar", False):
-        if 0.55 <= h["fondo"] <= 0.65 and not (0.55 <= h["ancho"] <= 0.65):
-            h["ancho"], h["fondo"] = h["fondo"], h["ancho"]
-
-bultos_60 = [h for h in huellas_suelo if 0.50 <= h['ancho'] <= 0.65]
-bultos_110 = [h for h in huellas_suelo if 1.00 <= h['ancho'] <= 1.35]
-bultos_especiales = [h for h in huellas_suelo if h not in bultos_60 and h not in bultos_110]
+# Ordenar por estabilidad de carga y volumen
+huellas_suelo.sort(key=lambda x: (ORDEN_ESTABILIDAD.get(x['categoria'], 9), -x['ancho'] * x['fondo']))
 
 placed = []
-cur_x = 0.03
 
-# Cabecera: Líneas homogéneas de 4 KSL
-ksl_puros = [b for b in bultos_60 if "KSL" in b['nombre']]
-otros_60 = [b for b in bultos_60 if "KSL" not in b['nombre']]
-
-while len(ksl_puros) >= 4:
-    cuarteto = ksl_puros[:4]
-    ksl_puros = ksl_puros[4:]
-    cur_y = 0.02
-    for b in cuarteto:
-        placed.append({'x': cur_x, 'y': cur_y, 'w_x': b['fondo'], 'h_y': b['ancho'], 'nombre': b['nombre'], 'color': b['color'], 'peso': b['peso'], 'alturas': b['alturas']})
-        cur_y += b['ancho'] + 0.01
-    cur_x += 1.00 + 0.02
-
-resto_60 = ksl_puros + otros_60
-resto_60.sort(key=lambda x: -x['fondo'])
-
-# Parejas completas de bultos anchos (SL-SUB, Motores)
-bultos_110.sort(key=lambda x: -x['fondo'])
-while len(bultos_110) >= 2:
-    pareja = [bultos_110.pop(0), bultos_110.pop(0)]
-    max_d = max(pareja[0]['fondo'], pareja[1]['fondo'])
-    placed.append({'x': cur_x, 'y': 0.02, 'w_x': pareja[0]['fondo'], 'h_y': pareja[0]['ancho'], 'nombre': pareja[0]['nombre'], 'color': pareja[0]['color'], 'peso': pareja[0]['peso'], 'alturas': pareja[0]['alturas']})
-    placed.append({'x': cur_x, 'y': 1.24, 'w_x': pareja[1]['fondo'], 'h_y': pareja[1]['ancho'], 'nombre': pareja[1]['nombre'], 'color': pareja[1]['color'], 'peso': pareja[1]['peso'], 'alturas': pareja[1]['alturas']})
-    cur_x += max_d + 0.02
-
-# Bulto ancho desparejado: se completa la calle con dos bultos de 60 cm al lado
-if len(bultos_110) == 1:
-    odd_double = bultos_110.pop(0)
-    placed.append({'x': cur_x, 'y': 0.02, 'w_x': odd_double['fondo'], 'h_y': odd_double['ancho'], 'nombre': odd_double['nombre'], 'color': odd_double['color'], 'peso': odd_double['peso'], 'alturas': odd_double['alturas']})
+for item in huellas_suelo:
+    orientaciones = [(item['ancho'], item['fondo'])]
+    if item.get('puede_rotar', False) and item['ancho'] != item['fondo']:
+        orientaciones.append((item['fondo'], item['ancho']))
     
-    cur_y_side = 1.24
-    depths_in_row = [odd_double['fondo']]
-    for _ in range(min(2, len(resto_60))):
-        it60 = resto_60.pop(0)
-        placed.append({'x': cur_x, 'y': cur_y_side, 'w_x': it60['fondo'], 'h_y': it60['ancho'], 'nombre': it60['nombre'], 'color': it60['color'], 'peso': it60['peso'], 'alturas': it60['alturas']})
-        depths_in_row.append(it60['fondo'])
-        cur_y_side += it60['ancho'] + 0.01
-        
-    cur_x += max(depths_in_row) + 0.02
+    mejor_x = 999.0
+    mejor_y = 0.0
+    mejor_w = item['ancho']
+    mejor_d = item['fondo']
+    mejor_slot = 0
+    
+    for (w_cand, d_cand) in orientaciones:
+        slots_necesarios = int(round(w_cand / PASO_Y))
+        if slots_necesarios > n_slots:
+            continue
+            
+        for s in range(n_slots - slots_necesarios + 1):
+            x_tope = max(skyline[s : s + slots_necesarios])
+            y_cand = s * PASO_Y
+            
+            # Priorizar avance pegado hacia cabecera
+            if x_tope < mejor_x:
+                mejor_x = x_tope
+                mejor_y = y_cand
+                mejor_w = w_cand
+                mejor_d = d_cand
+                mejor_slot = s
 
-# Líneas completas de 4 unidades de 60 cm
-while len(resto_60) >= 4 and (len(resto_60) > len(bultos_especiales) or len(bultos_especiales) == 0):
-    fila_4 = [resto_60.pop(0) for _ in range(4)]
-    max_d = max(item['fondo'] for item in fila_4)
-    cur_y = 0.02
-    for b in fila_4:
-        placed.append({'x': cur_x, 'y': cur_y, 'w_x': b['fondo'], 'h_y': b['ancho'], 'nombre': b['nombre'], 'color': b['color'], 'peso': b['peso'], 'alturas': b['alturas']})
-        cur_y += b['ancho'] + 0.01
-    cur_x += max_d + 0.02
-
-# Consolas Q338 en trasera con material de 60 cm acoplado al lateral
-for esp in bultos_especiales:
-    placed.append({'x': cur_x, 'y': 0.02, 'w_x': esp['fondo'], 'h_y': esp['ancho'], 'nombre': esp['nombre'], 'color': esp['color'], 'peso': esp['peso'], 'alturas': esp['alturas']})
-    if resto_60:
-        acompanante = resto_60.pop(0)
-        placed.append({'x': cur_x, 'y': 1.70, 'w_x': acompanante['fondo'], 'h_y': acompanante['ancho'], 'nombre': acompanante['nombre'], 'color': acompanante['color'], 'peso': acompanante['peso'], 'alturas': acompanante['alturas']})
-        cur_x += max(esp['fondo'], acompanante['fondo']) + 0.02
-    else:
-        cur_x += esp['fondo'] + 0.02
-
-while resto_60:
-    b = resto_60.pop(0)
-    placed.append({'x': cur_x, 'y': 0.02, 'w_x': b['fondo'], 'h_y': b['ancho'], 'nombre': b['nombre'], 'color': b['color'], 'peso': b['peso'], 'alturas': b['alturas']})
-    cur_x += b['fondo'] + 0.02
+    # Fijar bulto haciendo tope exacto con el elemento frontal
+    placed.append({
+        'x': mejor_x,
+        'y': mejor_y + 0.01,
+        'w_x': mejor_d,
+        'h_y': mejor_w - 0.015,
+        'nombre': item['nombre'],
+        'color': item['color'],
+        'peso': item['peso'],
+        'alturas': item['alturas']
+    })
+    
+    # Actualizar la cota frontal únicamente en las franjas que ocupa
+    slots_ocupados = int(round(mejor_w / PASO_Y))
+    nuevo_frente = mejor_x + mejor_d + 0.02
+    for s in range(mejor_slot, min(n_slots, mejor_slot + slots_ocupados)):
+        skyline[s] = nuevo_frente
 
 total_ml = max([p['x'] + p['w_x'] for p in placed]) if placed else 0.0
 ml_con_holgura = total_ml * 1.05
@@ -255,7 +262,7 @@ with col_der:
     ocupacion = min(100, int((ml_con_holgura / LARGO_CAMION) * 100))
     m4.metric("Ocupación Tráiler", f"{ocupacion}%", f"{max(0.0, LARGO_CAMION - ml_con_holgura):.1f} m libres")
 
-    st.subheader("📐 Esquema de Estiba en Planta")
+    st.subheader("📐 Esquema de Estiba en Planta (Contacto Continuo)")
     
     fig, ax = plt.subplots(figsize=(13, 3.8))
     ax.add_patch(patches.Rectangle((0, 0), LARGO_CAMION, ANCHO_CAMION, linewidth=2, edgecolor='#333333', facecolor='#F8F9FA'))
@@ -271,7 +278,7 @@ with col_der:
         texto_alt = f"\n({b['alturas']} alt)" if b['alturas'] > 1 and "alt" not in b['nombre'] else ""
         ax.text(
             b["x"] + b["w_x"]/2, b["y"] + b["h_y"]/2, 
-            f"{b['nombre']}{texto_alt}", color='white', ha='center', va='center', fontsize=7.2, fontweight='bold'
+            f"{b['nombre']}{texto_alt}", color='white', ha='center', va='center', fontsize=6.8, fontweight='bold'
         )
 
     if ml_con_holgura > 0:
