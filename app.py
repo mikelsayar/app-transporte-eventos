@@ -51,20 +51,6 @@ COLORES_CAT = {
     "Varios": "#6C757D"
 }
 
-# Se usa como desempate si dos bultos encajan igual de bien en un hueco
-PRIORIDAD_PESO = {
-    "PA / Cajas": 1,
-    "Subgraves": 2,
-    "Rigging / Motores": 3,
-    "Rigging / Estructura": 4,
-    "Amplificación": 5,
-    "Cableado": 6,
-    "Cableado / Accesorios": 6,
-    "Monitores": 7,
-    "Control / FOH": 8,
-    "Varios": 9
-}
-
 def obtener_alias(n):
     nl = n.lower()
     if "ksl" in nl and "bumper" not in nl: return "KSL"
@@ -92,9 +78,8 @@ with col_izq:
             nombre = str(row.get("Descripción / Unidad Logística", f"Bulto {idx+1}"))
             codigo = str(row.get("ID / Código", f"B{idx+1}"))
             
-            # Cantidades de tu última captura para recrear el mismo caso
             val_def = 5 if "KSL" in nombre and "Bumper" not in nombre else (
-                4 if "SL-SUB" in nombre else (
+                3 if "SL-SUB" in nombre else (
                     2 if "Motores" in nombre else (
                         2 if "D80" in nombre else (
                             3 if "D40" in nombre else (
@@ -110,7 +95,7 @@ with col_izq:
             )
             cantidades[codigo] = st.number_input(nombre, min_value=0, value=val_def, step=1, key=f"inp_{codigo}")
 
-# 1. HUELLAS DE SUELO Y APILADO REMONTABLE COMPARTIDO
+# 1. HUELLAS FÍSICAS Y APILADO VERTICAL COMPARTIDO
 peso_total = 0.0
 compat_pools = defaultdict(list)
 items_individuales = []
@@ -130,7 +115,11 @@ if df_catalogo is not None:
             
             peso_total += cant * peso_u
             
+            # Todo el material modular puede rotar, excepto los KSL o subs cuyo patín dicte lo contrario
+            puede_rotar = not ("ksl" in nombre.lower() and "bumper" not in nombre.lower()) and not ("sl-sub" in nombre.lower())
+            
             if "quantum" in nombre.lower() or "q338" in nombre.lower():
+                puede_rotar = False
                 ancho_cm, fondo_cm = 165, 65
 
             item_info = {
@@ -142,8 +131,7 @@ if df_catalogo is not None:
                 "peso": peso_u,
                 "max_stack": max_stack,
                 "color": COLORES_CAT.get(categoria, "#495057"),
-                "puede_rotar": True,  # TODO EL MATERIAL TIENE LIBERTAD DE ROTACIÓN
-                "prio": PRIORIDAD_PESO.get(categoria, 9)
+                "puede_rotar": puede_rotar
             }
 
             if max_stack > 1:
@@ -164,38 +152,40 @@ for key, units in compat_pools.items():
         lbl_parts = [f"{cnt}x {k}" if cnt > 1 else k for k, cnt in counts.items()]
         pool_items.append({
             "name": " / ".join(lbl_parts),
+            "categoria": cat,
             "w": w_cm,
             "d": d_cm,
             "color": torre[0]["color"],
             "peso": sum(u["peso"] for u in torre),
             "alt": len(torre),
-            "puede_rotar": True,
-            "prio": torre[0]["prio"]
+            "puede_rotar": torre[0]["puede_rotar"]
         })
 
 for it in items_individuales:
     pool_items.append({
         "name": it["alias"],
+        "categoria": it["categoria"],
         "w": it["w"],
         "d": it["d"],
         "color": it["color"],
         "peso": it["peso"],
         "alt": 1,
-        "puede_rotar": True,
-        "prio": it["prio"]
+        "puede_rotar": it["puede_rotar"]
     })
 
-# 2. MOTOR DE OPTIMIZACIÓN PURA TETRIS (SKYLINE BEST-FIT ABSOLUTO)
+# 2. MOTOR DE EMPAQUETADO PURO "BEST-FIT SKYLINE CONTINUO" (TETRIS TOTAL)
 TRUCK_W_CM = 248
+ANCHO_CAMION = 2.48
 LARGO_CAMION = 13.60
-skyline = np.zeros(TRUCK_W_CM, dtype=float) + 3.0 # 3cm de margen inicial
+skyline = np.zeros(TRUCK_W_CM, dtype=float) + 3.0
 placed = []
-pool = list(pool_items)
+
+consoles = [it for it in pool_items if "q338" in it['name'].lower() or "consola" in it['name'].lower()]
+pool = [it for it in pool_items if it not in consoles]
 
 while pool:
     min_x = np.min(skyline)
     
-    # 2.1 Encontrar el valle más ancho disponible en la cota más profunda
     valleys = []
     in_v = False
     v_s = 0
@@ -221,7 +211,6 @@ while pool:
     best_cand_y = None
     best_cand_x = None
     
-    # 2.2 Buscar la pieza que MEJOR tape ese valle sin salirse de su ancho
     for idx, item in enumerate(pool):
         orientations = [(item['w'], item['d'])]
         if item.get('puede_rotar', True) and item['w'] != item['d']:
@@ -229,11 +218,9 @@ while pool:
             
         for (w_cm, d_cm) in orientations:
             if w_cm <= target_v_len:
-                # Puntuación: prioriza rellenar el 100% del ancho del hueco y colar piezas grandes/pesadas primero
                 width_fill_ratio = w_cm / target_v_len
                 area = w_cm * d_cm
-                prio_peso = (10 - item['prio']) * 10000 
-                score = prio_peso + (width_fill_ratio * 1000) + area
+                score = (width_fill_ratio * 1000) + area
                 
                 if score > best_cand_score:
                     best_cand_score = score
@@ -244,7 +231,6 @@ while pool:
                     best_cand_x = np.max(skyline[best_cand_y : best_cand_y + best_cand_w])
                     
     if best_cand_idx is not None:
-        # Colocamos la pieza ganadora en el valle
         it = pool.pop(best_cand_idx)
         placed.append({
             'name': it['name'], 'color': it['color'], 'alt': it.get('alt', 1),
@@ -253,7 +239,6 @@ while pool:
         })
         skyline[best_cand_y : best_cand_y + best_cand_w] = best_cand_x + best_cand_d + 1.5
     else:
-        # 2.3 Si ninguna pieza cabe limpia en el valle, buscamos la que avance la carga lo MÍNIMO posible
         min_new_x = float('inf')
         fallback_idx = None
         f_y, f_w, f_d, f_x = None, None, None, None
@@ -265,7 +250,6 @@ while pool:
                 
             for (w_cm, d_cm) in orientations:
                 if w_cm > TRUCK_W_CM: continue
-                # Escaneo ultra-rápido de toda la manga del camión
                 for y_cand in range(0, TRUCK_W_CM - w_cm + 1, 5):
                     cur_x = np.max(skyline[y_cand : y_cand + w_cm])
                     new_x = cur_x + d_cm
@@ -275,7 +259,6 @@ while pool:
                         fallback_idx = idx
                         f_y, f_w, f_d, f_x = y_cand, w_cm, d_cm, cur_x
                     elif abs(new_x - min_new_x) <= 0.5:
-                        # Desempate por volumen de bulto
                         if (w_cm * d_cm) > (f_w * f_d if f_w else 0):
                             fallback_idx = idx
                             f_y, f_w, f_d, f_x = y_cand, w_cm, d_cm, cur_x
@@ -290,6 +273,15 @@ while pool:
             skyline[f_y : f_y + f_w] = f_x + f_d + 1.5
         else:
             break
+
+for c in consoles:
+    cur_c_x = np.max(skyline[0 : c['w']])
+    placed.append({
+        'name': c['name'], 'color': c['color'], 'alt': c.get('alt', 1),
+        'x': cur_c_x / 100.0, 'y': 0.02,
+        'w_x': c['d'] / 100.0, 'h_y': c['w'] / 100.0
+    })
+    skyline[0 : c['w']] = cur_c_x + c['d'] + 1.5
 
 total_ml = max([p['x'] + p['w_x'] for p in placed]) if placed else 0.0
 ml_con_holgura = total_ml * 1.05
@@ -309,7 +301,7 @@ with col_der:
     ocupacion = min(100, int((ml_con_holgura / LARGO_CAMION) * 100))
     m4.metric("Ocupación Tráiler", f"{ocupacion}%", f"{max(0.0, LARGO_CAMION - ml_con_holgura):.1f} m libres")
 
-    st.subheader("📐 Esquema de Estiba en Planta (Carga Continua Optimizada)")
+    st.subheader("📐 Esquema de Estiba en Planta (Contacto Directo Optimizado)")
     
     fig, ax = plt.subplots(figsize=(13, 3.8))
     ax.add_patch(patches.Rectangle((0, 0), LARGO_CAMION, ANCHO_CAMION, linewidth=2, edgecolor='#333333', facecolor='#F8F9FA'))
