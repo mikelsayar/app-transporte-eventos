@@ -131,7 +131,6 @@ if df_catalogo is not None:
             alias = obtener_alias(nombre)
             fam = clasificar_familia(alias, categoria)
 
-            # Normalizar medidas clave según realidad de gira
             if fam == "SUB":
                 ancho_cm, fondo_cm = 110, 130
                 puede_rotar = False
@@ -140,9 +139,8 @@ if df_catalogo is not None:
                 puede_rotar = False
             elif fam == "FOH":
                 ancho_cm, fondo_cm = 165, 65
-                puede_rotar = True
+                puede_rotar = False
             else:
-                # Si es un baúl de 80x60, su orientación base modular es 60 de ancho x 80 de fondo
                 if (ancho_cm == 80 and fondo_cm == 60):
                     ancho_cm, fondo_cm = 60, 80
                 puede_rotar = True
@@ -199,28 +197,31 @@ for it in items_individuales:
         "rot": it["rot"]
     })
 
-# 2. MOTOR SKYLINE CON CIERRE AUTOMÁTICO DE RENDIJAS RESIDUALES
+# 2. MOTOR SKYLINE SIN SOLAPAMIENTOS Y CON CIERRE DE RENDIJAS RESIDUALES
 TRUCK_W_CM = 248
 ANCHO_CAMION = 2.48
 LARGO_CAMION = 13.60
 
-def ejecutar_skyline(items_entrada, orden_familias, permitir_rotar_60=False, permitir_rotar_consolas=False):
+def ejecutar_skyline(items_entrada, orden_familias, permitir_rotar_60=False, consolas_longitudinales=False):
     skyline = np.zeros(TRUCK_W_CM, dtype=float) + 3.0
     placed = []
-    pool = [dict(it) for it in items_entrada]
+    pool = []
+    for it in items_entrada:
+        copia = dict(it)
+        if copia["cat"] == "FOH":
+            copia["w"], copia["d"] = (65, 165) if consolas_longitudinales else (165, 65)
+            copia["rot"] = False
+        pool.append(copia)
+
     pool.sort(key=lambda it: (orden_familias.get(it["cat"], 9), -it["d"], -it["w"]))
 
     while pool:
         min_w_pool = min(
-            min(it["w"], it["d"]) if (
-                it.get("rot", False)
-                and (permitir_rotar_60 or it["w"] != 60)
-                and (permitir_rotar_consolas or it["cat"] != "FOH")
-            ) else it["w"]
+            min(it["w"], it["d"]) if (it.get("rot", False) and (permitir_rotar_60 or it["w"] != 60)) else it["w"]
             for it in pool
         )
 
-        # Cierre de rendijas estrechas donde ya no cabe ningún bulto (Valley Raising)
+        # Cierre de rendijas estrechas donde no cabe ningún bulto restante
         while True:
             min_x = np.min(skyline)
             valleys = []
@@ -259,8 +260,6 @@ def ejecutar_skyline(items_entrada, orden_familias, permitir_rotar_60=False, per
             can_rot = it.get("rot", False)
             if it["w"] == 60 and not permitir_rotar_60:
                 can_rot = False
-            if it["cat"] == "FOH" and not permitir_rotar_consolas:
-                can_rot = False
 
             orientations = [(it["w"], it["d"])]
             if can_rot and it["w"] != it["d"]:
@@ -271,7 +270,6 @@ def ejecutar_skyline(items_entrada, orden_familias, permitir_rotar_60=False, per
                     rem = v_len - w_cm
                     queue_prio = (len(pool) - idx) * 300
 
-                    # Premiar encajes que dejen hueco para otro módulo (>=min_w_pool) o cierren calle (<=28 cm)
                     if rem >= min_w_pool or rem <= 28:
                         mod_bonus = 2000 - (rem * 10 if rem < min_w_pool else 0)
                     else:
@@ -312,7 +310,8 @@ def ejecutar_skyline(items_entrada, orden_familias, permitir_rotar_60=False, per
             "w_x": best_d / 100.0,
             "h_y": best_w / 100.0,
         })
-        skyline[best_y : best_y + best_w] = best_x + d_cm + 1.5
+        # CORREGIDO: suma best_d (profundidad real del bulto colocado)
+        skyline[best_y : best_y + best_w] = best_x + best_d + 1.5
 
     total_ml = max([p["x"] + p["w_x"] for p in placed]) if placed else 0.0
     return placed, total_ml
@@ -333,19 +332,17 @@ with col_der:
         candidatos.append(ejecutar_skyline(pool_items, {"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "FOH": 5, "CAB": 6}, False, False))
         candidatos.append(ejecutar_skyline(pool_items, {"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "CAB": 5, "FOH": 6}, False, True))
     elif modo_estiba == "SL-SUB al Final (Puertas / Trasera)":
-        candidatos.append(ejecutar_skyline(pool_items, {"PA": 1, "RIG": 2, "AMP": 3, "FOH": 4, "CAB": 5, "SUB": 6}, False, False))
         candidatos.append(ejecutar_skyline(pool_items, {"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "FOH": 5, "SUB": 6}, False, True))
+        candidatos.append(ejecutar_skyline(pool_items, {"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "SUB": 5, "FOH": 6}, False, False))
     else:
-        # Evalúa todas las configuraciones lógicas y elige la más corta en metros lineales
         ordenes = [
             ({"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "FOH": 5, "CAB": 6}, False, False),
-            ({"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "CAB": 5, "FOH": 6}, False, True),
-            ({"PA": 1, "RIG": 2, "AMP": 3, "FOH": 4, "CAB": 5, "SUB": 6}, False, False),
-            ({"PA": 1, "AMP": 2, "CAB": 3, "FOH": 4, "SUB": 5, "RIG": 6}, False, True),
-            ({"RIG": 1, "CAB": 2, "PA": 3, "SUB": 4, "FOH": 5, "AMP": 6}, False, True),
+            ({"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "FOH": 5, "SUB": 6}, False, True),
+            ({"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "SUB": 5, "FOH": 6}, False, False),
+            ({"RIG": 1, "PA": 2, "AMP": 3, "CAB": 4, "FOH": 5, "SUB": 6}, False, True),
         ]
-        for ord_map, r60, rcon in ordenes:
-            candidatos.append(ejecutar_skyline(pool_items, ord_map, r60, rcon))
+        for ord_map, r60, lcon in ordenes:
+            candidatos.append(ejecutar_skyline(pool_items, ord_map, r60, lcon))
 
     placed, total_ml = min(candidatos, key=lambda x: x[1]) if candidatos else ([], 0.0)
     ml_con_holgura = total_ml * 1.05
