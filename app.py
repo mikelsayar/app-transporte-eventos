@@ -8,8 +8,10 @@ from collections import defaultdict, Counter
 st.set_page_config(page_title="Transporte y Estiba de Eventos", layout="wide", page_icon="🚛")
 
 # --- ENLACES A GOOGLE SHEETS ---
-CSV_URL_CATALOGO = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv&gid=0"
-# 👇 SUSTITUYE ESTO POR EL GID DE TU PESTAÑA DE VEHÍCULOS
+# Dejamos la URL del catálogo como estaba originalmente (sin el gid) para que coja la pestaña principal por defecto.
+CSV_URL_CATALOGO = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv"
+
+# 👇 SUSTITUYE EL 123456789 POR EL NÚMERO GID DE TU PESTAÑA DE VEHÍCULOS
 CSV_URL_VEHICULOS = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv&gid=102"
 
 def parse_num(val, default=0.0):
