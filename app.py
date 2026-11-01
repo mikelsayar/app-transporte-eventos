@@ -8,7 +8,7 @@ from collections import defaultdict, Counter
 st.set_page_config(page_title="Transporte y Estiba de Eventos", layout="wide", page_icon="🚛")
 
 # --- ENLACES A GOOGLE SHEETS ---
-CSV_URL_CATALOGO = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv&gid=101"
+CSV_URL_CATALOGO = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv&gid=0"
 # 👇 SUSTITUYE ESTO POR EL GID DE TU PESTAÑA DE VEHÍCULOS
 CSV_URL_VEHICULOS = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv&gid=102"
 
