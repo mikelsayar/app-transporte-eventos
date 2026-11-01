@@ -10,7 +10,7 @@ st.set_page_config(page_title="Transporte y Estiba de Eventos", layout="wide", p
 # --- ENLACES A GOOGLE SHEETS ---
 CSV_URL_CATALOGO = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv"
 # 👇 MANTÉN AQUÍ EL GID REAL DE TU PESTAÑA DE VEHÍCULOS
-CSV_URL_VEHICULOS = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv&gid=PON_AQUI_TU_GID"
+CSV_URL_VEHICULOS = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv&gid=102"
 
 def parse_num(val, default=0.0):
     if pd.isna(val) or val is None or str(val).strip() == '':
@@ -163,7 +163,6 @@ with col_izq:
     st.subheader("📋 Dotación Activa")
     elementos_activos = False
     
-    # Solo pintamos los inputs de los equipos que tienen al menos 1 unidad en la carga
     if df_catalogo is not None:
         for idx, row in df_catalogo.iterrows():
             codigo = str(row.get("ID / Código", f"B{idx+1}"))
@@ -185,17 +184,13 @@ with col_izq:
     if not elementos_activos:
         st.info("Camión vacío. Añade material manualmente o carga la demo.")
 
-    # --- SECCIÓN AÑADIR MATERIAL EXTRA ---
+    # --- SECCIÓN AÑADIR MATERIAL EXTRA (DOBLE DESPLEGABLE) ---
     st.subheader("➕ Añadir Material Extra")
     if df_catalogo is not None and "Categoría" in df_catalogo.columns:
-        # 1. Filtramos las categorías únicas que existen en tu Excel
         categorias_unicas = df_catalogo["Categoría"].dropna().unique().tolist()
-        categorias_unicas.sort() # Las ordenamos alfabéticamente
+        categorias_unicas.sort()
         
-        # 2. Primer desplegable: Seleccionar Familia
         cat_sel = st.selectbox("1. Filtra por Familia:", categorias_unicas)
-        
-        # 3. Filtramos el Excel virtualmente para quedarnos solo con esa familia
         df_filtrado = df_catalogo[df_catalogo["Categoría"] == cat_sel]
         
         opciones_cat = {}
@@ -204,10 +199,7 @@ with col_izq:
             nom = str(row.get("Descripción / Unidad Logística", cod))
             opciones_cat[f"{nom} ({cod})"] = cod
             
-        # 4. Segundo desplegable: Seleccionar el bulto concreto de esa familia
         articulo_sel = st.selectbox("2. Selecciona el Bulto:", list(opciones_cat.keys()))
-        
-        # 5. Cantidad y botón
         cant_extra = st.number_input("Cantidad a añadir:", min_value=1, value=1, step=1, key="cant_extra")
         
         if st.button("Añadir al camión"):
@@ -303,7 +295,7 @@ for it in items_individuales:
         "rot": it["rot"]
     })
 
-# 2. MOTOR SKYLINE SIN SOLAPAMIENTOS Y CON CIERRE DE RENDIJAS RESIDUALES
+# 2. MOTOR SKYLINE PARAMETRIZADO AL ANCHO DEL VEHÍCULO
 def ejecutar_skyline(items_entrada, orden_familias, truck_w_cm, permitir_rotar_60=False, consolas_longitudinales=False):
     skyline = np.zeros(truck_w_cm, dtype=float) + 3.0
     placed = []
@@ -428,18 +420,19 @@ with col_der:
     )
 
     candidatos = []
+    # Las FOH (5) SIEMPRE van al lado de los SUB (1 o 6) o al final del bloque modular (antes del SUB).
     if modo_estiba == "SL-SUB al Fondo Interior (Cabecera)":
-        candidatos.append(ejecutar_skyline(pool_items, {"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "FOH": 5, "CAB": 6}, TRUCK_W_CM, False, False))
+        candidatos.append(ejecutar_skyline(pool_items, {"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "CAB": 5, "FOH": 6}, TRUCK_W_CM, False, False))
         candidatos.append(ejecutar_skyline(pool_items, {"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "CAB": 5, "FOH": 6}, TRUCK_W_CM, False, True))
     elif modo_estiba == "SL-SUB al Final (Puertas / Trasera)":
         candidatos.append(ejecutar_skyline(pool_items, {"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "FOH": 5, "SUB": 6}, TRUCK_W_CM, False, True))
-        candidatos.append(ejecutar_skyline(pool_items, {"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "SUB": 5, "FOH": 6}, TRUCK_W_CM, False, False))
+        candidatos.append(ejecutar_skyline(pool_items, {"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "FOH": 5, "SUB": 6}, TRUCK_W_CM, False, False))
     else:
+        # En el modo automático, restringimos el orden para que las consolas nunca queden en el medio
         ordenes = [
-            ({"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "FOH": 5, "CAB": 6}, False, False),
+            ({"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "CAB": 5, "FOH": 6}, False, False),
             ({"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "FOH": 5, "SUB": 6}, False, True),
-            ({"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "SUB": 5, "FOH": 6}, False, False),
-            ({"RIG": 1, "PA": 2, "AMP": 3, "CAB": 4, "FOH": 5, "SUB": 6}, False, True),
+            ({"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "FOH": 5, "SUB": 6}, False, False)
         ]
         for ord_map, r60, lcon in ordenes:
             candidatos.append(ejecutar_skyline(pool_items, ord_map, TRUCK_W_CM, r60, lcon))
