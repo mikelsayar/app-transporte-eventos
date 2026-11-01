@@ -382,3 +382,6 @@ def ejecutar_skyline(items_entrada, orden_familias):
             right_x = skyline[v_start + v_len] if (v_start + v_len) < TRUCK_W_CM else float("inf")
             raise_to = min(left_x, right_x)
             if raise_to == float("inf") or raise_to <= min_x:
+                raise_to = min_x + 5.0
+            skyline[v_start : v_start + v_len] = raise_to
+            continue
