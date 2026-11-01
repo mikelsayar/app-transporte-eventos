@@ -7,7 +7,10 @@ from collections import defaultdict, Counter
 
 st.set_page_config(page_title="Transporte y Estiba de Eventos", layout="wide", page_icon="🚛")
 
-CSV_URL = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv"
+# --- ENLACES A GOOGLE SHEETS ---
+CSV_URL_CATALOGO = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv&gid=0"
+# 👇 SUSTITUYE ESTO POR EL GID DE TU PESTAÑA DE VEHÍCULOS
+CSV_URL_VEHICULOS = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv&gid=102"
 
 def parse_num(val, default=0.0):
     if pd.isna(val) or val is None or str(val).strip() == '':
@@ -19,21 +22,27 @@ def parse_num(val, default=0.0):
         return default
 
 @st.cache_data(ttl=60)
-def cargar_catalogo():
+def cargar_datos():
     try:
-        df = pd.read_csv(CSV_URL)
-        return df
+        df_cat = pd.read_csv(CSV_URL_CATALOGO)
     except:
-        return None
+        df_cat = None
+        
+    try:
+        df_veh = pd.read_csv(CSV_URL_VEHICULOS)
+    except:
+        df_veh = None
+        
+    return df_cat, df_veh
 
-df_catalogo = cargar_catalogo()
+df_catalogo, df_vehiculos = cargar_datos()
 
 st.title("🚛 Gestor de Transporte y Estiba de Eventos")
 
 if df_catalogo is None:
-    st.error("⚠️ Error temporal al conectar con Google Sheets.")
+    st.error("⚠️ Error temporal al conectar con la pestaña Catálogo de Google Sheets.")
 else:
-    st.success("☁️ Sincronizado en tiempo real con tu catálogo logístico.")
+    st.success("☁️ Sincronizado en tiempo real con tus catálogos logísticos.")
 
 col_izq, col_der = st.columns([1, 2])
 cantidades = {}
@@ -68,19 +77,41 @@ def obtener_alias(n):
 
 def clasificar_familia(alias, categoria):
     al = alias.lower()
-    if "sl-sub" in al or "sub" in categoria.lower():
-        return "SUB"
-    if "ksl" in al and "bumper" not in al:
-        return "PA"
-    if "motor" in al or "bumper" in al or "rigging" in categoria.lower():
-        return "RIG"
-    if any(x in al for x in ["d80", "d40", "d90", "d25"]) or "amplif" in categoria.lower():
-        return "AMP"
-    if "q338" in al or "control" in categoria.lower():
-        return "FOH"
+    if "sl-sub" in al or "sub" in categoria.lower(): return "SUB"
+    if "ksl" in al and "bumper" not in al: return "PA"
+    if "motor" in al or "bumper" in al or "rigging" in categoria.lower(): return "RIG"
+    if any(x in al for x in ["d80", "d40", "d90", "d25"]) or "amplif" in categoria.lower(): return "AMP"
+    if "q338" in al or "control" in categoria.lower(): return "FOH"
     return "CAB"
 
 with col_izq:
+    st.subheader("🚚 Vehículo de Transporte")
+    
+    dic_vehiculos = {}
+    if df_vehiculos is not None and not df_vehiculos.empty:
+        for idx, row in df_vehiculos.iterrows():
+            nombre = str(row.get("Vehículo", f"Opción {idx+1}"))
+            if nombre.strip() == "" or nombre.lower() == "nan": continue
+            largo = parse_num(row.get("Largo útil (m)", 13.60))
+            ancho = parse_num(row.get("Ancho útil (m)", 2.48))
+            peso = parse_num(row.get("Carga útil (kg)", 24000))
+            dic_vehiculos[nombre] = {"largo": largo, "ancho": ancho, "peso": peso}
+            
+    if not dic_vehiculos:
+        # Fallback de seguridad si falla la hoja o el GID no es válido aún
+        dic_vehiculos = {
+            "Tráiler Estándar 13.6m": {"largo": 13.60, "ancho": 2.48, "peso": 24000},
+            "Rígido 18t (8.0m)": {"largo": 8.00, "ancho": 2.45, "peso": 9000},
+            "Furgón Carrozado Ligero": {"largo": 4.20, "ancho": 2.10, "peso": 1000}
+        }
+        
+    vehiculo_sel = st.selectbox("Selecciona la capacidad del vehículo:", list(dic_vehiculos.keys()))
+    
+    LARGO_CAMION = dic_vehiculos[vehiculo_sel]["largo"]
+    ANCHO_CAMION = dic_vehiculos[vehiculo_sel]["ancho"]
+    PESO_MAX = dic_vehiculos[vehiculo_sel]["peso"]
+    TRUCK_W_CM = int(round(ANCHO_CAMION * 100))
+
     st.subheader("📄 Carga de Albarán")
     archivo = st.file_uploader("Arrastra el albarán técnico (PDF / Imagen)", type=["pdf", "png", "jpg", "jpeg"])
     if archivo:
@@ -139,7 +170,7 @@ if df_catalogo is not None:
                 puede_rotar = False
             elif fam == "FOH":
                 ancho_cm, fondo_cm = 165, 65
-                puede_rotar = False
+                puede_rotar = True
             else:
                 if (ancho_cm == 80 and fondo_cm == 60):
                     ancho_cm, fondo_cm = 60, 80
@@ -197,13 +228,9 @@ for it in items_individuales:
         "rot": it["rot"]
     })
 
-# 2. MOTOR SKYLINE SIN SOLAPAMIENTOS Y CON CIERRE DE RENDIJAS RESIDUALES
-TRUCK_W_CM = 248
-ANCHO_CAMION = 2.48
-LARGO_CAMION = 13.60
-
-def ejecutar_skyline(items_entrada, orden_familias, permitir_rotar_60=False, consolas_longitudinales=False):
-    skyline = np.zeros(TRUCK_W_CM, dtype=float) + 3.0
+# 2. MOTOR SKYLINE PARAMETRIZADO AL ANCHO DEL VEHÍCULO
+def ejecutar_skyline(items_entrada, orden_familias, truck_w_cm, permitir_rotar_60=False, consolas_longitudinales=False):
+    skyline = np.zeros(truck_w_cm, dtype=float) + 3.0
     placed = []
     pool = []
     for it in items_entrada:
@@ -217,17 +244,16 @@ def ejecutar_skyline(items_entrada, orden_familias, permitir_rotar_60=False, con
 
     while pool:
         min_w_pool = min(
-            min(it["w"], it["d"]) if (it.get("rot", False) and (permitir_rotar_60 or it["w"] != 60)) else it["w"]
+            min(it["w"], it["d"]) if (it.get("rot", False) and (permitir_rotar_60 or it["w"] != 60) and it["cat"] != "FOH") else it["w"]
             for it in pool
         )
 
-        # Cierre de rendijas estrechas donde no cabe ningún bulto restante
         while True:
             min_x = np.min(skyline)
             valleys = []
             in_v = False
             v_s = 0
-            for i in range(TRUCK_W_CM):
+            for i in range(truck_w_cm):
                 if skyline[i] <= min_x + 1.5:
                     if not in_v:
                         in_v = True
@@ -237,14 +263,14 @@ def ejecutar_skyline(items_entrada, orden_familias, permitir_rotar_60=False, con
                         valleys.append((v_s, i - v_s))
                         in_v = False
             if in_v:
-                valleys.append((v_s, TRUCK_W_CM - v_s))
+                valleys.append((v_s, truck_w_cm - v_s))
 
             valleys.sort(key=lambda v: (-v[1], v[0]))
             v_start, v_len = valleys[0]
 
             if v_len < min_w_pool:
                 left_x = skyline[v_start - 1] if v_start > 0 else float("inf")
-                right_x = skyline[v_start + v_len] if (v_start + v_len) < TRUCK_W_CM else float("inf")
+                right_x = skyline[v_start + v_len] if (v_start + v_len) < truck_w_cm else float("inf")
                 raise_to = min(left_x, right_x)
                 if raise_to == float("inf") or raise_to <= min_x:
                     raise_to = min_x + 5.0
@@ -293,7 +319,7 @@ def ejecutar_skyline(items_entrada, orden_familias, permitir_rotar_60=False, con
 
         if best_idx is None:
             left_x = skyline[v_start - 1] if v_start > 0 else float("inf")
-            right_x = skyline[v_start + v_len] if (v_start + v_len) < TRUCK_W_CM else float("inf")
+            right_x = skyline[v_start + v_len] if (v_start + v_len) < truck_w_cm else float("inf")
             raise_to = min(left_x, right_x)
             if raise_to == float("inf") or raise_to <= min_x:
                 raise_to = min_x + 5.0
@@ -310,7 +336,6 @@ def ejecutar_skyline(items_entrada, orden_familias, permitir_rotar_60=False, con
             "w_x": best_d / 100.0,
             "h_y": best_w / 100.0,
         })
-        # CORREGIDO: suma best_d (profundidad real del bulto colocado)
         skyline[best_y : best_y + best_w] = best_x + best_d + 1.5
 
     total_ml = max([p["x"] + p["w_x"] for p in placed]) if placed else 0.0
@@ -329,11 +354,11 @@ with col_der:
 
     candidatos = []
     if modo_estiba == "SL-SUB al Fondo Interior (Cabecera)":
-        candidatos.append(ejecutar_skyline(pool_items, {"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "FOH": 5, "CAB": 6}, False, False))
-        candidatos.append(ejecutar_skyline(pool_items, {"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "CAB": 5, "FOH": 6}, False, True))
+        candidatos.append(ejecutar_skyline(pool_items, {"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "FOH": 5, "CAB": 6}, TRUCK_W_CM, False, False))
+        candidatos.append(ejecutar_skyline(pool_items, {"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "CAB": 5, "FOH": 6}, TRUCK_W_CM, False, True))
     elif modo_estiba == "SL-SUB al Final (Puertas / Trasera)":
-        candidatos.append(ejecutar_skyline(pool_items, {"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "FOH": 5, "SUB": 6}, False, True))
-        candidatos.append(ejecutar_skyline(pool_items, {"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "SUB": 5, "FOH": 6}, False, False))
+        candidatos.append(ejecutar_skyline(pool_items, {"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "FOH": 5, "SUB": 6}, TRUCK_W_CM, False, True))
+        candidatos.append(ejecutar_skyline(pool_items, {"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "SUB": 5, "FOH": 6}, TRUCK_W_CM, False, False))
     else:
         ordenes = [
             ({"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "FOH": 5, "CAB": 6}, False, False),
@@ -342,28 +367,35 @@ with col_der:
             ({"RIG": 1, "PA": 2, "AMP": 3, "CAB": 4, "FOH": 5, "SUB": 6}, False, True),
         ]
         for ord_map, r60, lcon in ordenes:
-            candidatos.append(ejecutar_skyline(pool_items, ord_map, r60, lcon))
+            candidatos.append(ejecutar_skyline(pool_items, ord_map, TRUCK_W_CM, r60, lcon))
 
     placed, total_ml = min(candidatos, key=lambda x: x[1]) if candidatos else ([], 0.0)
     ml_con_holgura = total_ml * 1.05
 
     st.subheader("📊 Resumen Logístico de Carga")
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Metros Lineales (Fondo)", f"{ml_con_holgura:.2f} ML", f"Neto: {total_ml:.2f} m")
-    m2.metric("Peso Total Estimado", f"{peso_total:,.0f} kg")
+    m1.metric("Metros Lineales", f"{ml_con_holgura:.2f} ML", f"Neto: {total_ml:.2f} m")
     
-    if ml_con_holgura <= 7.8 and peso_total <= 9000:
-        vehiculo = "Rígido 18t (8.0m)"
+    # Alerta visual si se excede el peso de la ficha del vehículo
+    if peso_total > PESO_MAX:
+        m2.error(f"⚠️ {peso_total:,.0f} kg")
+        m2.metric("Peso Total Estimado", f"{peso_total:,.0f} kg", f"Exceso: +{peso_total - PESO_MAX:,.0f} kg", delta_color="inverse")
     else:
-        vehiculo = "Tráiler 13.60m"
-    m3.metric("Vehículo Óptimo", vehiculo)
+        m2.metric("Peso Total Estimado", f"{peso_total:,.0f} kg", f"Libres: {PESO_MAX - peso_total:,.0f} kg", delta_color="normal")
+        
+    m3.metric("Vehículo Seleccionado", vehiculo_sel)
 
-    ocupacion = min(100, int((ml_con_holgura / LARGO_CAMION) * 100))
-    m4.metric("Ocupación Tráiler", f"{ocupacion}%", f"{max(0.0, LARGO_CAMION - ml_con_holgura):.1f} m libres")
+    # Alerta visual si sobresale de la longitud del vehículo
+    ocupacion = int((ml_con_holgura / LARGO_CAMION) * 100)
+    if ml_con_holgura > LARGO_CAMION:
+        m4.metric(f"Ocupación ({LARGO_CAMION}m)", f"{ocupacion}%", f"¡Sobran {ml_con_holgura - LARGO_CAMION:.1f} m!", delta_color="inverse")
+    else:
+        m4.metric(f"Ocupación ({LARGO_CAMION}m)", f"{ocupacion}%", f"Libres: {LARGO_CAMION - ml_con_holgura:.1f} m", delta_color="normal")
 
-    st.subheader("📐 Esquema de Estiba en Planta (Contacto Directo Optimizado)")
+    st.subheader("📐 Esquema de Estiba en Planta")
     
     fig, ax = plt.subplots(figsize=(13, 3.8))
+    # Dibuja la caja del camión físicamente
     ax.add_patch(patches.Rectangle((0, 0), LARGO_CAMION, ANCHO_CAMION, linewidth=2, edgecolor='#333333', facecolor='#F8F9FA'))
 
     for b in placed:
@@ -380,15 +412,22 @@ with col_der:
             f"{b['name']}{texto_alt}", color='white', ha='center', va='center', fontsize=6.8, fontweight='bold'
         )
 
+    # Línea sólida roja marcando las puertas físicas del vehículo
+    ax.axvline(x=LARGO_CAMION, color='red', linestyle='-', linewidth=3)
+    ax.text(LARGO_CAMION - 0.15, ANCHO_CAMION + 0.12, "PUERTAS REALES", fontsize=8.5, fontweight='bold', color='red', ha='right')
+
+    # Línea punteada que muestra hasta dónde llega la carga real
     if ml_con_holgura > 0:
-        ax.axvline(x=ml_con_holgura, color='#D6336C', linestyle='--', linewidth=2.5)
-        ax.text(ml_con_holgura + 0.15, 1.24, f"FIN DE CARGA\n{ml_con_holgura:.2f} ML\n(Neto: {total_ml:.2f} m)", 
-                color='#D6336C', fontsize=8.5, fontweight='bold', va='center')
+        color_fin = 'green' if ml_con_holgura <= LARGO_CAMION else 'red'
+        ax.axvline(x=ml_con_holgura, color=color_fin, linestyle='--', linewidth=2.5)
+        ax.text(ml_con_holgura + 0.15, 1.24, f"FIN DE CARGA\n{ml_con_holgura:.2f} ML", 
+                color=color_fin, fontsize=8.5, fontweight='bold', va='center')
 
     ax.text(0.1, ANCHO_CAMION + 0.12, "FRENTE / CABECERA", fontsize=8.5, fontweight='bold', color='#1971C2')
-    ax.text(LARGO_CAMION - 0.2, ANCHO_CAMION + 0.12, "PUERTAS / TRASERA", fontsize=8.5, fontweight='bold', color='#D6336C', ha='right')
-
-    ax.set_xlim(-0.2, LARGO_CAMION + 0.2)
+    
+    # Ajuste dinámico de los límites de la gráfica para que no se corte si la carga sobresale del camión
+    limite_x = max(LARGO_CAMION, ml_con_holgura)
+    ax.set_xlim(-0.2, limite_x + 1.0)
     ax.set_ylim(-0.2, ANCHO_CAMION + 0.4)
     ax.set_aspect('equal')
     ax.axis('off')
