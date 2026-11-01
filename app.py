@@ -10,7 +10,7 @@ st.set_page_config(page_title="Gestor de Transporte", layout="wide", page_icon="
 # --- ENLACES A GOOGLE SHEETS ---
 CSV_URL_CATALOGO = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv"
 # 👇 MANTÉN AQUÍ EL GID REAL DE TU PESTAÑA DE VEHÍCULOS
-CSV_URL_VEHICULOS = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv&gid=PON_AQUI_TU_GID"
+CSV_URL_VEHICULOS = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv&gid=102"
 
 def parse_num(val, default=0.0):
     if pd.isna(val) or val is None or str(val).strip() == '': return default
@@ -53,7 +53,7 @@ def obtener_alias(n):
     if "quantum" in nl or "digico" in nl: return "Q338"
     if "bumper" in nl: return "Bumper"
     if "motor" in nl: return "Motores"
-    return n[:10]
+    return n[:15]
 
 def clasificar_familia(alias, categoria):
     al = alias.lower()
@@ -177,6 +177,8 @@ if df_catalogo is not None:
             nombre = str(row.get("Descripción / Unidad Logística", codigo))
             categoria = str(row.get("Categoría", "Varios"))
             peso_u = parse_num(row.get("Peso Bruto por bulto (kg)", 0))
+            
+            # Coge estrictamente las medidas geométricas de la hoja del usuario sin excepciones
             ancho_cm = int(round(parse_num(row.get("Ancho al frontal de carga (cm)", 60))))
             fondo_cm = int(round(parse_num(row.get("Fondo de calle (cm)", 80))))
             max_stack = max(1, int(parse_num(row.get("Alturas de apilado", 1))))
@@ -185,18 +187,8 @@ if df_catalogo is not None:
             alias = obtener_alias(nombre)
             fam = clasificar_familia(alias, categoria)
 
-            if fam == "FOH":
-                ancho_cm, fondo_cm = 165, 65
-                puede_rotar = False
-            elif fam == "SUB":
-                ancho_cm, fondo_cm = 110, 130
-                puede_rotar = False
-            elif fam == "PA":
-                ancho_cm, fondo_cm = 60, 100
-                puede_rotar = False
-            else:
-                if (ancho_cm == 80 and fondo_cm == 60): ancho_cm, fondo_cm = 60, 80
-                puede_rotar = True
+            # Por defecto, todo bulto con ruedas se puede rotar 90 grados para encajar mejor.
+            puede_rotar = True
 
             item_info = {
                 "nombre": nombre, "alias": alias, "familia": fam, "w": ancho_cm, "d": fondo_cm,
@@ -225,14 +217,17 @@ for it in items_individuales:
         "color": it["color"], "alt": 1, "rot": it["rot"]
     })
 
+# --- MOTOR SKYLINE PURO (SOLO GEOMETRÍA Y AGRUPACIÓN) ---
 def ejecutar_skyline(items_entrada, orden_familias):
     skyline = np.zeros(TRUCK_W_CM, dtype=float) + 3.0
     placed = []
     pool = [dict(it) for it in items_entrada]
-    pool.sort(key=lambda it: (orden_familias.get(it["cat"], 9), -it["w"], -it["d"]))
+    
+    # Orden puramente geométrico y lógico: 1º Familia, 2º Cajas más grandes primero (área)
+    pool.sort(key=lambda it: (orden_familias.get(it["cat"], 9), -(it["w"] * it["d"])))
 
     while pool:
-        min_w_pool = min((min(it["w"], it["d"]) if it.get("rot", False) else it["w"]) for it in pool)
+        min_w_pool = min((min(it["w"], it["d"]) if it.get("rot", True) else it["w"]) for it in pool)
         if min_w_pool > TRUCK_W_CM: break
 
         while True:
@@ -267,20 +262,26 @@ def ejecutar_skyline(items_entrada, orden_familias):
 
         for idx, it in enumerate(pool):
             orientations = [(it["w"], it["d"])]
-            if it.get("rot", False) and it["w"] != it["d"]: orientations.append((it["d"], it["w"]))
+            if it.get("rot", True) and it["w"] != it["d"]: 
+                orientations.append((it["d"], it["w"]))
+                
             for (w_cm, d_cm) in orientations:
                 if w_cm <= v_len:
                     rem = v_len - w_cm
-                    queue_prio = (len(pool) - idx) * 300
-                    mod_bonus = 2000 - (rem * 10 if rem < min_w_pool else 0) if (rem >= min_w_pool or rem <= 28) else -5000
+                    queue_prio = (len(pool) - idx) * 200
+                    mod_bonus = 1500 if (rem >= min_w_pool or rem <= 28) else -5000
+                    
                     cand_y = v_start
                     cand_x = np.max(skyline[cand_y : cand_y + w_cm])
                     
-                    # Bono extremo para forzar que las mesas Q338 formen pared recta sin zig-zag
-                    level_bonus = 3500 if (cand_y > 0 and abs(skyline[cand_y - 1] - (cand_x + d_cm + 1.5)) <= 4.0) else 0
-                    if it["cat"] == "FOH": level_bonus += 5000
-                    
-                    orig_bonus = 400 if w_cm == it["w"] else 0
+                    # El algoritmo busca nivelar naturalmente las cajas vecinas para crear paredes planas
+                    level_bonus = 0
+                    if cand_y > 0 and abs(skyline[cand_y - 1] - (cand_x + d_cm + 1.5)) <= 5.0:
+                        level_bonus += 2000
+                    if cand_y + w_cm < TRUCK_W_CM and abs(skyline[cand_y + w_cm] - (cand_x + d_cm + 1.5)) <= 5.0:
+                        level_bonus += 2000
+                        
+                    orig_bonus = 100 if w_cm == it["w"] else 0
                     score = queue_prio + mod_bonus + level_bonus + orig_bonus
 
                     if score > best_score:
@@ -304,15 +305,17 @@ def ejecutar_skyline(items_entrada, orden_familias):
 
 with col_der:
     modo_estiba = st.radio(
-        "🎯 Estrategia de ubicación de Subgraves (SL-SUB) y Consolas (FOH):",
-        ["SUB en Cabecera, FOH cruzado + Baúl lateral", "SUB al Final (Puertas)"], horizontal=True
+        "🎯 Orden de entrada de las Familias Logísticas al camión:",
+        [
+            "Grandes Volúmenes primero (Subgraves -> PA -> Control -> Racks)", 
+            "PA en Cabecera -> Control y Subs al Final"
+        ], horizontal=True
     )
 
-    # El orden 5 (FOH) antes del 6 (CAB) permite que el baúl rellene el pasillo lateral de la mesa
-    if modo_estiba == "SUB en Cabecera, FOH cruzado + Baúl lateral":
-        placed, total_ml = ejecutar_skyline(pool_items, {"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "FOH": 5, "CAB": 6})
+    if modo_estiba == "Grandes Volúmenes primero (Subgraves -> PA -> Control -> Racks)":
+        placed, total_ml = ejecutar_skyline(pool_items, {"SUB": 1, "RIG": 2, "PA": 3, "FOH": 4, "CAB": 5, "AMP": 6})
     else:
-        placed, total_ml = ejecutar_skyline(pool_items, {"PA": 1, "AMP": 2, "RIG": 3, "FOH": 4, "CAB": 5, "SUB": 6})
+        placed, total_ml = ejecutar_skyline(pool_items, {"PA": 1, "AMP": 2, "RIG": 3, "CAB": 4, "FOH": 5, "SUB": 6})
         
     ml_con_holgura = total_ml * 1.05
 
