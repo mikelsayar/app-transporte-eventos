@@ -229,15 +229,19 @@ if df_catalogo is not None:
             alias = obtener_alias(nombre)
             fam = clasificar_familia(alias, categoria)
 
-            if fam == "SUB":
+            # Consolas a medida exacta (transversales)
+            if fam == "FOH":
+                ancho_cm, fondo_cm = 165, 65
+                puede_rotar = False
+            # Subgraves (no rotan)
+            elif fam == "SUB":
                 ancho_cm, fondo_cm = 110, 130
                 puede_rotar = False
+            # Cajas PA (no rotan en carro)
             elif fam == "PA":
                 ancho_cm, fondo_cm = 60, 100
                 puede_rotar = False
-            elif fam == "FOH":
-                ancho_cm, fondo_cm = 165, 65
-                puede_rotar = True
+            # Racks, motores y baúles modulares (giran 360)
             else:
                 if (ancho_cm == 80 and fondo_cm == 60):
                     ancho_cm, fondo_cm = 60, 80
@@ -247,7 +251,6 @@ if df_catalogo is not None:
                 "nombre": nombre,
                 "alias": alias,
                 "familia": fam,
-                "categoria": categoria,
                 "w": ancho_cm,
                 "d": fondo_cm,
                 "peso": peso_u,
@@ -278,11 +281,9 @@ for key, units in compat_pools.items():
             "w": w_cm,
             "d": d_cm,
             "color": torre[0]["color"],
-            "peso": sum(u["peso"] for u in torre),
             "alt": len(torre),
             "rot": torre[0]["rot"]
         })
-
 for it in items_individuales:
     pool_items.append({
         "name": it["alias"],
@@ -290,28 +291,22 @@ for it in items_individuales:
         "w": it["w"],
         "d": it["d"],
         "color": it["color"],
-        "peso": it["peso"],
         "alt": 1,
         "rot": it["rot"]
     })
 
-# 2. MOTOR SKYLINE PARAMETRIZADO AL ANCHO DEL VEHÍCULO
-def ejecutar_skyline(items_entrada, orden_familias, truck_w_cm, permitir_rotar_60=False, consolas_longitudinales=False):
-    skyline = np.zeros(truck_w_cm, dtype=float) + 3.0
+# 2. MOTOR SKYLINE ESTRUCTURADO (EVITA ZIG-ZAGS DE CONSOLAS)
+def ejecutar_skyline(items_entrada, orden_familias):
+    skyline = np.zeros(TRUCK_W_CM, dtype=float) + 3.0
     placed = []
-    pool = []
-    for it in items_entrada:
-        copia = dict(it)
-        if copia["cat"] == "FOH":
-            copia["w"], copia["d"] = (65, 165) if consolas_longitudinales else (165, 65)
-            copia["rot"] = False
-        pool.append(copia)
-
-    pool.sort(key=lambda it: (orden_familias.get(it["cat"], 9), -it["d"], -it["w"]))
+    pool = [dict(it) for it in items_entrada]
+    # Ordenación estricta: Agrupa las familias en bloque para no fragmentar paredes
+    pool.sort(key=lambda it: (orden_familias.get(it["cat"], 9), -it["w"], -it["d"]))
 
     while pool:
+        # Calcular pieza más pequeña disponible para saber si un hueco es inservible
         min_w_pool = min(
-            min(it["w"], it["d"]) if (it.get("rot", False) and (permitir_rotar_60 or it["w"] != 60) and it["cat"] != "FOH") else it["w"]
+            min(it["w"], it["d"]) if it.get("rot", False) else it["w"]
             for it in pool
         )
 
@@ -320,7 +315,7 @@ def ejecutar_skyline(items_entrada, orden_familias, truck_w_cm, permitir_rotar_6
             valleys = []
             in_v = False
             v_s = 0
-            for i in range(truck_w_cm):
+            for i in range(TRUCK_W_CM):
                 if skyline[i] <= min_x + 1.5:
                     if not in_v:
                         in_v = True
@@ -330,14 +325,15 @@ def ejecutar_skyline(items_entrada, orden_familias, truck_w_cm, permitir_rotar_6
                         valleys.append((v_s, i - v_s))
                         in_v = False
             if in_v:
-                valleys.append((v_s, truck_w_cm - v_s))
+                valleys.append((v_s, TRUCK_W_CM - v_s))
 
             valleys.sort(key=lambda v: (-v[1], v[0]))
             v_start, v_len = valleys[0]
 
+            # Si el valle es más estrecho que la pieza más pequeña, se sella y nivela
             if v_len < min_w_pool:
                 left_x = skyline[v_start - 1] if v_start > 0 else float("inf")
-                right_x = skyline[v_start + v_len] if (v_start + v_len) < truck_w_cm else float("inf")
+                right_x = skyline[v_start + v_len] if (v_start + v_len) < TRUCK_W_CM else float("inf")
                 raise_to = min(left_x, right_x)
                 if raise_to == float("inf") or raise_to <= min_x:
                     raise_to = min_x + 5.0
@@ -351,9 +347,6 @@ def ejecutar_skyline(items_entrada, orden_familias, truck_w_cm, permitir_rotar_6
 
         for idx, it in enumerate(pool):
             can_rot = it.get("rot", False)
-            if it["w"] == 60 and not permitir_rotar_60:
-                can_rot = False
-
             orientations = [(it["w"], it["d"])]
             if can_rot and it["w"] != it["d"]:
                 orientations.append((it["d"], it["w"]))
@@ -377,8 +370,8 @@ def ejecutar_skyline(items_entrada, orden_familias, truck_w_cm, permitir_rotar_6
                         level_bonus = 1500
 
                     orig_bonus = 400 if w_cm == it["w"] else 0
-
                     score = queue_prio + mod_bonus + level_bonus + orig_bonus
+
                     if score > best_score:
                         best_score = score
                         best_idx = idx
@@ -386,112 +379,6 @@ def ejecutar_skyline(items_entrada, orden_familias, truck_w_cm, permitir_rotar_6
 
         if best_idx is None:
             left_x = skyline[v_start - 1] if v_start > 0 else float("inf")
-            right_x = skyline[v_start + v_len] if (v_start + v_len) < truck_w_cm else float("inf")
+            right_x = skyline[v_start + v_len] if (v_start + v_len) < TRUCK_W_CM else float("inf")
             raise_to = min(left_x, right_x)
-            if raise_to == float("inf") or raise_to <= min_x:
-                raise_to = min_x + 5.0
-            skyline[v_start : v_start + v_len] = raise_to
-            continue
-
-        it = pool.pop(best_idx)
-        placed.append({
-            "name": it["name"],
-            "color": it["color"],
-            "alt": it["alt"],
-            "x": best_x / 100.0,
-            "y": best_y / 100.0,
-            "w_x": best_d / 100.0,
-            "h_y": best_w / 100.0,
-        })
-        skyline[best_y : best_y + best_w] = best_x + best_d + 1.5
-
-    total_ml = max([p["x"] + p["w_x"] for p in placed]) if placed else 0.0
-    return placed, total_ml
-
-with col_der:
-    modo_estiba = st.radio(
-        "🎯 Estrategia de ubicación de Subgraves (SL-SUB) y optimización:",
-        [
-            "Automático (Mínimos Metros Lineales)",
-            "SL-SUB al Fondo Interior (Cabecera)",
-            "SL-SUB al Final (Puertas / Trasera)"
-        ],
-        horizontal=True
-    )
-
-    candidatos = []
-    # Las FOH (5) SIEMPRE van al lado de los SUB (1 o 6) o al final del bloque modular (antes del SUB).
-    if modo_estiba == "SL-SUB al Fondo Interior (Cabecera)":
-        candidatos.append(ejecutar_skyline(pool_items, {"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "CAB": 5, "FOH": 6}, TRUCK_W_CM, False, False))
-        candidatos.append(ejecutar_skyline(pool_items, {"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "CAB": 5, "FOH": 6}, TRUCK_W_CM, False, True))
-    elif modo_estiba == "SL-SUB al Final (Puertas / Trasera)":
-        candidatos.append(ejecutar_skyline(pool_items, {"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "FOH": 5, "SUB": 6}, TRUCK_W_CM, False, True))
-        candidatos.append(ejecutar_skyline(pool_items, {"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "FOH": 5, "SUB": 6}, TRUCK_W_CM, False, False))
-    else:
-        # En el modo automático, restringimos el orden para que las consolas nunca queden en el medio
-        ordenes = [
-            ({"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "CAB": 5, "FOH": 6}, False, False),
-            ({"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "FOH": 5, "SUB": 6}, False, True),
-            ({"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "FOH": 5, "SUB": 6}, False, False)
-        ]
-        for ord_map, r60, lcon in ordenes:
-            candidatos.append(ejecutar_skyline(pool_items, ord_map, TRUCK_W_CM, r60, lcon))
-
-    placed, total_ml = min(candidatos, key=lambda x: x[1]) if candidatos else ([], 0.0)
-    ml_con_holgura = total_ml * 1.05
-
-    st.subheader("📊 Resumen Logístico de Carga")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Metros Lineales", f"{ml_con_holgura:.2f} ML", f"Neto: {total_ml:.2f} m")
-    
-    if peso_total > PESO_MAX:
-        m2.error(f"⚠️ {peso_total:,.0f} kg")
-        m2.metric("Peso Total Estimado", f"{peso_total:,.0f} kg", f"Exceso: +{peso_total - PESO_MAX:,.0f} kg", delta_color="inverse")
-    else:
-        m2.metric("Peso Total Estimado", f"{peso_total:,.0f} kg", f"Libres: {PESO_MAX - peso_total:,.0f} kg", delta_color="normal")
-        
-    m3.metric("Vehículo Seleccionado", vehiculo_sel)
-
-    ocupacion = int((ml_con_holgura / LARGO_CAMION) * 100) if LARGO_CAMION > 0 else 0
-    if ml_con_holgura > LARGO_CAMION:
-        m4.metric(f"Ocupación ({LARGO_CAMION}m)", f"{ocupacion}%", f"¡Sobran {ml_con_holgura - LARGO_CAMION:.1f} m!", delta_color="inverse")
-    else:
-        m4.metric(f"Ocupación ({LARGO_CAMION}m)", f"{ocupacion}%", f"Libres: {LARGO_CAMION - ml_con_holgura:.1f} m", delta_color="normal")
-
-    st.subheader("📐 Esquema de Estiba en Planta")
-    
-    fig, ax = plt.subplots(figsize=(13, 3.8))
-    ax.add_patch(patches.Rectangle((0, 0), LARGO_CAMION, ANCHO_CAMION, linewidth=2, edgecolor='#333333', facecolor='#F8F9FA'))
-
-    for b in placed:
-        rect = patches.FancyBboxPatch(
-            (b["x"], b["y"]), b["w_x"], b["h_y"],
-            boxstyle="round,pad=0.01", linewidth=1.1,
-            edgecolor='#1E1E1E', facecolor=b["color"], alpha=0.90
-        )
-        ax.add_patch(rect)
-        
-        texto_alt = f"\n({b['alt']} alt)" if b['alt'] > 1 and "alt" not in b['name'] else ""
-        ax.text(
-            b["x"] + b["w_x"]/2, b["y"] + b["h_y"]/2, 
-            f"{b['name']}{texto_alt}", color='white', ha='center', va='center', fontsize=6.8, fontweight='bold'
-        )
-
-    ax.axvline(x=LARGO_CAMION, color='red', linestyle='-', linewidth=3)
-    ax.text(LARGO_CAMION - 0.15, ANCHO_CAMION + 0.12, "PUERTAS REALES", fontsize=8.5, fontweight='bold', color='red', ha='right')
-
-    if ml_con_holgura > 0:
-        color_fin = 'green' if ml_con_holgura <= LARGO_CAMION else 'red'
-        ax.axvline(x=ml_con_holgura, color=color_fin, linestyle='--', linewidth=2.5)
-        ax.text(ml_con_holgura + 0.15, 1.24, f"FIN DE CARGA\n{ml_con_holgura:.2f} ML", 
-                color=color_fin, fontsize=8.5, fontweight='bold', va='center')
-
-    ax.text(0.1, ANCHO_CAMION + 0.12, "FRENTE / CABECERA", fontsize=8.5, fontweight='bold', color='#1971C2')
-    
-    limite_x = max(LARGO_CAMION, ml_con_holgura)
-    ax.set_xlim(-0.2, limite_x + 1.0)
-    ax.set_ylim(-0.2, ANCHO_CAMION + 0.4)
-    ax.set_aspect('equal')
-    ax.axis('off')
-
-    st.pyplot(fig)
+            if raise_to == float("inf") or raise_to <= min_x
