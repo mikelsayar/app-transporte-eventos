@@ -99,7 +99,7 @@ with col_izq:
             
             largo = parse_num(row[cols[1]] if len(cols) > 1 else None, 13.60)
             ancho = parse_num(row[cols[2]] if len(cols) > 2 else None, 2.48)
-            peso = parse_num(row[cols[3]] if len(cols) > 3 else None, 24000)
+            peso = parse_num(row[cols[5]] if len(cols) > 5 else None, 24000)
             
             dic_vehiculos[nombre] = {"largo": largo, "ancho": ancho, "peso": peso}
             
