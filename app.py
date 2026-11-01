@@ -10,7 +10,7 @@ st.set_page_config(page_title="Gestor de Transporte", layout="wide", page_icon="
 # --- ENLACES A GOOGLE SHEETS ---
 CSV_URL_CATALOGO = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv"
 # 👇 MANTÉN AQUÍ EL GID REAL DE TU PESTAÑA DE VEHÍCULOS
-CSV_URL_VEHICULOS = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv&gid=102"
+CSV_URL_VEHICULOS = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv&gid=PON_AQUI_TU_GID"
 
 def parse_num(val, default=0.0):
     if pd.isna(val) or val is None or str(val).strip() == '': return default
@@ -233,11 +233,7 @@ def ejecutar_skyline(items_entrada, orden_familias):
 
     while pool:
         min_w_pool = min((min(it["w"], it["d"]) if it.get("rot", False) else it["w"]) for it in pool)
-        
-        # Parche de seguridad: si un bulto es más ancho que el propio camión
-        if min_w_pool > TRUCK_W_CM:
-            st.error(f"¡Atención! Hay un bulto que ocupa {min_w_pool}cm y es físicamente más ancho que el vehículo seleccionado ({TRUCK_W_CM}cm).")
-            break
+        if min_w_pool > TRUCK_W_CM: break
 
         while True:
             min_x = np.min(skyline)
@@ -261,15 +257,13 @@ def ejecutar_skyline(items_entrada, orden_familias):
                 left_x = skyline[v_start - 1] if v_start > 0 else float("inf")
                 right_x = skyline[v_start + v_len] if (v_start + v_len) < TRUCK_W_CM else float("inf")
                 raise_to = min(left_x, right_x)
-                if raise_to == float("inf") or raise_to <= min_x:
-                    raise_to = min_x + 5.0
+                if raise_to == float("inf") or raise_to <= min_x: raise_to = min_x + 5.0
                 skyline[v_start : v_start + v_len] = raise_to
             else:
                 break
 
-        best_idx = None
+        best_idx, best_score = None, -float("inf")
         best_w, best_d, best_y, best_x = None, None, None, None
-        best_score = -float("inf")
 
         for idx, it in enumerate(pool):
             orientations = [(it["w"], it["d"])]
@@ -281,7 +275,11 @@ def ejecutar_skyline(items_entrada, orden_familias):
                     mod_bonus = 2000 - (rem * 10 if rem < min_w_pool else 0) if (rem >= min_w_pool or rem <= 28) else -5000
                     cand_y = v_start
                     cand_x = np.max(skyline[cand_y : cand_y + w_cm])
-                    level_bonus = 1500 if (cand_y > 0 and abs(skyline[cand_y - 1] - (cand_x + d_cm + 1.5)) <= 4.0) else 0
+                    
+                    # Bono extremo para forzar que las mesas Q338 formen pared recta sin zig-zag
+                    level_bonus = 3500 if (cand_y > 0 and abs(skyline[cand_y - 1] - (cand_x + d_cm + 1.5)) <= 4.0) else 0
+                    if it["cat"] == "FOH": level_bonus += 5000
+                    
                     orig_bonus = 400 if w_cm == it["w"] else 0
                     score = queue_prio + mod_bonus + level_bonus + orig_bonus
 
@@ -307,13 +305,14 @@ def ejecutar_skyline(items_entrada, orden_familias):
 with col_der:
     modo_estiba = st.radio(
         "🎯 Estrategia de ubicación de Subgraves (SL-SUB) y Consolas (FOH):",
-        ["Optimizada: FOH y SUB agrupados al Final", "Clásica: SUB en Cabecera, FOH al Final"], horizontal=True
+        ["SUB en Cabecera, FOH cruzado + Baúl lateral", "SUB al Final (Puertas)"], horizontal=True
     )
 
-    if modo_estiba == "Clásica: SUB en Cabecera, FOH al Final":
-        placed, total_ml = ejecutar_skyline(pool_items, {"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "CAB": 5, "FOH": 6})
+    # El orden 5 (FOH) antes del 6 (CAB) permite que el baúl rellene el pasillo lateral de la mesa
+    if modo_estiba == "SUB en Cabecera, FOH cruzado + Baúl lateral":
+        placed, total_ml = ejecutar_skyline(pool_items, {"SUB": 1, "RIG": 2, "PA": 3, "AMP": 4, "FOH": 5, "CAB": 6})
     else:
-        placed, total_ml = ejecutar_skyline(pool_items, {"PA": 1, "AMP": 2, "CAB": 3, "RIG": 4, "FOH": 5, "SUB": 6})
+        placed, total_ml = ejecutar_skyline(pool_items, {"PA": 1, "AMP": 2, "RIG": 3, "FOH": 4, "CAB": 5, "SUB": 6})
         
     ml_con_holgura = total_ml * 1.05
 
