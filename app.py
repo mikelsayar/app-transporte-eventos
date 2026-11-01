@@ -8,11 +8,9 @@ from collections import defaultdict, Counter
 st.set_page_config(page_title="Transporte y Estiba de Eventos", layout="wide", page_icon="🚛")
 
 # --- ENLACES A GOOGLE SHEETS ---
-# Dejamos la URL del catálogo como estaba originalmente (sin el gid) para que coja la pestaña principal por defecto.
 CSV_URL_CATALOGO = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv"
-
-# 👇 SUSTITUYE EL 123456789 POR EL NÚMERO GID DE TU PESTAÑA DE VEHÍCULOS
-CSV_URL_VEHICULOS = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv&gid=102"
+# 👇 MANTÉN AQUÍ EL GID REAL DE TU PESTAÑA DE VEHÍCULOS
+CSV_URL_VEHICULOS = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv&gid=PON_AQUI_TU_GID"
 
 def parse_num(val, default=0.0):
     if pd.isna(val) or val is None or str(val).strip() == '':
@@ -29,12 +27,10 @@ def cargar_datos():
         df_cat = pd.read_csv(CSV_URL_CATALOGO)
     except:
         df_cat = None
-        
     try:
         df_veh = pd.read_csv(CSV_URL_VEHICULOS)
     except:
         df_veh = None
-        
     return df_cat, df_veh
 
 df_catalogo, df_vehiculos = cargar_datos()
@@ -45,9 +41,6 @@ if df_catalogo is None:
     st.error("⚠️ Error temporal al conectar con la pestaña Catálogo de Google Sheets.")
 else:
     st.success("☁️ Sincronizado en tiempo real con tus catálogos logísticos.")
-
-col_izq, col_der = st.columns([1, 2])
-cantidades = {}
 
 COLORES_CAT = {
     "PA / Cajas": "#1971C2",
@@ -86,25 +79,61 @@ def clasificar_familia(alias, categoria):
     if "q338" in al or "control" in categoria.lower(): return "FOH"
     return "CAB"
 
+# --- 0. INICIALIZACIÓN DE ESTADO DINÁMICO (SESSION STATE) ---
+if "cantidades" not in st.session_state:
+    st.session_state.cantidades = {}
+    if df_catalogo is not None:
+        for idx, row in df_catalogo.iterrows():
+            cod = str(row.get("ID / Código", f"B{idx+1}"))
+            st.session_state.cantidades[cod] = 0
+
+def limpiar_carga():
+    for k in st.session_state.cantidades.keys():
+        st.session_state.cantidades[k] = 0
+
+def cargar_demo():
+    limpiar_carga()
+    if df_catalogo is not None:
+        for idx, row in df_catalogo.iterrows():
+            nombre = str(row.get("Descripción / Unidad Logística", ""))
+            cod = str(row.get("ID / Código", f"B{idx+1}"))
+            val_def = 5 if "KSL" in nombre and "Bumper" not in nombre else (
+                4 if "SL-SUB" in nombre else (
+                    2 if "Motores" in nombre else (
+                        2 if "D80" in nombre else (
+                            3 if "D40" in nombre else (
+                                5 if "120x60" in nombre else (
+                                    1 if "80x60" in nombre else (
+                                        2 if "Quantum" in nombre else 0
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+            st.session_state.cantidades[cod] = val_def
+
+def actualizar_cantidad(codigo):
+    st.session_state.cantidades[codigo] = st.session_state[f"inp_{codigo}"]
+
+col_izq, col_der = st.columns([1, 2])
+
 with col_izq:
     st.subheader("🚚 Vehículo de Transporte")
     
     dic_vehiculos = {}
     if df_vehiculos is not None and not df_vehiculos.empty:
-        # Leemos las columnas directamente por su posición (0, 1, 2, 3) sin importar cómo se llamen
         cols = df_vehiculos.columns
         for idx, row in df_vehiculos.iterrows():
             nombre = str(row[cols[0]])
             if nombre.strip() == "" or nombre.lower() == "nan": continue
-            
             largo = parse_num(row[cols[1]] if len(cols) > 1 else None, 13.60)
             ancho = parse_num(row[cols[2]] if len(cols) > 2 else None, 2.48)
             peso = parse_num(row[cols[5]] if len(cols) > 5 else None, 24000)
-            
             dic_vehiculos[nombre] = {"largo": largo, "ancho": ancho, "peso": peso}
             
     if not dic_vehiculos:
-        # Fallback de seguridad si la pestaña está vacía
         dic_vehiculos = {
             "Tráiler Estándar 13.6m": {"largo": 13.60, "ancho": 2.48, "peso": 24000},
             "Rígido 18t (8.0m)": {"largo": 8.00, "ancho": 2.45, "peso": 9000},
@@ -121,30 +150,57 @@ with col_izq:
     st.subheader("📄 Carga de Albarán")
     archivo = st.file_uploader("Arrastra el albarán técnico (PDF / Imagen)", type=["pdf", "png", "jpg", "jpeg"])
     if archivo:
-        st.info(f"Albarán cargado: {archivo.name}")
+        st.info(f"Albarán preparado: {archivo.name} (Procesamiento automático en desarrollo)")
 
-    st.subheader("📋 Dotación de Material")
+    c1, c2 = st.columns(2)
+    if c1.button("🗑️ Nuevo Evento / Limpiar"):
+        limpiar_carga()
+        st.rerun()
+    if c2.button("🧪 Cargar Demo"):
+        cargar_demo()
+        st.rerun()
+
+    st.subheader("📋 Dotación Activa")
+    elementos_activos = False
+    
+    # Solo pintamos los inputs de los equipos que tienen al menos 1 unidad en la carga
     if df_catalogo is not None:
         for idx, row in df_catalogo.iterrows():
-            nombre = str(row.get("Descripción / Unidad Logística", f"Bulto {idx+1}"))
             codigo = str(row.get("ID / Código", f"B{idx+1}"))
+            val_actual = st.session_state.cantidades.get(codigo, 0)
             
-            val_def = 5 if "KSL" in nombre and "Bumper" not in nombre else (
-                4 if "SL-SUB" in nombre else (
-                    2 if "Motores" in nombre else (
-                        2 if "D80" in nombre else (
-                            3 if "D40" in nombre else (
-                                5 if "120x60" in nombre else (
-                                    1 if "80x60" in nombre else (
-                                        2 if "Quantum" in nombre else 0
-                                    )
-                                )
-                            )
-                        )
-                    )
+            if val_actual > 0:
+                elementos_activos = True
+                nombre = str(row.get("Descripción / Unidad Logística", codigo))
+                st.number_input(
+                    nombre, 
+                    min_value=0, 
+                    value=val_actual, 
+                    step=1, 
+                    key=f"inp_{codigo}",
+                    on_change=actualizar_cantidad,
+                    args=(codigo,)
                 )
-            )
-            cantidades[codigo] = st.number_input(nombre, min_value=0, value=val_def, step=1, key=f"inp_{codigo}")
+                
+    if not elementos_activos:
+        st.info("Camión vacío. Añade material manualmente o carga la demo.")
+
+    # --- SECCIÓN AÑADIR MATERIAL EXTRA ---
+    st.subheader("➕ Añadir Material Extra")
+    if df_catalogo is not None:
+        opciones_cat = {}
+        for idx, row in df_catalogo.iterrows():
+            cod = str(row.get("ID / Código", f"B{idx+1}"))
+            nom = str(row.get("Descripción / Unidad Logística", cod))
+            opciones_cat[f"{nom} ({cod})"] = cod
+            
+        sel_extra = st.selectbox("Buscar en catálogo de almacén:", list(opciones_cat.keys()))
+        cant_extra = st.number_input("Cantidad a añadir:", min_value=1, value=1, step=1, key="cant_extra")
+        
+        if st.button("Añadir al camión"):
+            cod_sel = opciones_cat[sel_extra]
+            st.session_state.cantidades[cod_sel] += cant_extra
+            st.rerun()
 
 # 1. HUELLAS FÍSICAS Y APILADO VERTICAL COMPARTIDO
 peso_total = 0.0
@@ -154,7 +210,7 @@ items_individuales = []
 if df_catalogo is not None:
     for idx, row in df_catalogo.iterrows():
         codigo = str(row.get("ID / Código", f"B{idx+1}"))
-        cant = cantidades.get(codigo, 0)
+        cant = st.session_state.cantidades.get(codigo, 0)
         
         if cant > 0:
             nombre = str(row.get("Descripción / Unidad Logística", codigo))
@@ -234,7 +290,7 @@ for it in items_individuales:
         "rot": it["rot"]
     })
 
-# 2. MOTOR SKYLINE PARAMETRIZADO AL ANCHO DEL VEHÍCULO
+# 2. MOTOR SKYLINE SIN SOLAPAMIENTOS Y CON CIERRE DE RENDIJAS RESIDUALES
 def ejecutar_skyline(items_entrada, orden_familias, truck_w_cm, permitir_rotar_60=False, consolas_longitudinales=False):
     skyline = np.zeros(truck_w_cm, dtype=float) + 3.0
     placed = []
@@ -382,7 +438,6 @@ with col_der:
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Metros Lineales", f"{ml_con_holgura:.2f} ML", f"Neto: {total_ml:.2f} m")
     
-    # Alerta visual si se excede el peso de la ficha del vehículo
     if peso_total > PESO_MAX:
         m2.error(f"⚠️ {peso_total:,.0f} kg")
         m2.metric("Peso Total Estimado", f"{peso_total:,.0f} kg", f"Exceso: +{peso_total - PESO_MAX:,.0f} kg", delta_color="inverse")
@@ -391,8 +446,7 @@ with col_der:
         
     m3.metric("Vehículo Seleccionado", vehiculo_sel)
 
-    # Alerta visual si sobresale de la longitud del vehículo
-    ocupacion = int((ml_con_holgura / LARGO_CAMION) * 100)
+    ocupacion = int((ml_con_holgura / LARGO_CAMION) * 100) if LARGO_CAMION > 0 else 0
     if ml_con_holgura > LARGO_CAMION:
         m4.metric(f"Ocupación ({LARGO_CAMION}m)", f"{ocupacion}%", f"¡Sobran {ml_con_holgura - LARGO_CAMION:.1f} m!", delta_color="inverse")
     else:
@@ -401,7 +455,6 @@ with col_der:
     st.subheader("📐 Esquema de Estiba en Planta")
     
     fig, ax = plt.subplots(figsize=(13, 3.8))
-    # Dibuja la caja del camión físicamente
     ax.add_patch(patches.Rectangle((0, 0), LARGO_CAMION, ANCHO_CAMION, linewidth=2, edgecolor='#333333', facecolor='#F8F9FA'))
 
     for b in placed:
@@ -418,11 +471,9 @@ with col_der:
             f"{b['name']}{texto_alt}", color='white', ha='center', va='center', fontsize=6.8, fontweight='bold'
         )
 
-    # Línea sólida roja marcando las puertas físicas del vehículo
     ax.axvline(x=LARGO_CAMION, color='red', linestyle='-', linewidth=3)
     ax.text(LARGO_CAMION - 0.15, ANCHO_CAMION + 0.12, "PUERTAS REALES", fontsize=8.5, fontweight='bold', color='red', ha='right')
 
-    # Línea punteada que muestra hasta dónde llega la carga real
     if ml_con_holgura > 0:
         color_fin = 'green' if ml_con_holgura <= LARGO_CAMION else 'red'
         ax.axvline(x=ml_con_holgura, color=color_fin, linestyle='--', linewidth=2.5)
@@ -431,7 +482,6 @@ with col_der:
 
     ax.text(0.1, ANCHO_CAMION + 0.12, "FRENTE / CABECERA", fontsize=8.5, fontweight='bold', color='#1971C2')
     
-    # Ajuste dinámico de los límites de la gráfica para que no se corte si la carga sobresale del camión
     limite_x = max(LARGO_CAMION, ml_con_holgura)
     ax.set_xlim(-0.2, limite_x + 1.0)
     ax.set_ylim(-0.2, ANCHO_CAMION + 0.4)
