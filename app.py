@@ -91,16 +91,20 @@ with col_izq:
     
     dic_vehiculos = {}
     if df_vehiculos is not None and not df_vehiculos.empty:
+        # Leemos las columnas directamente por su posición (0, 1, 2, 3) sin importar cómo se llamen
+        cols = df_vehiculos.columns
         for idx, row in df_vehiculos.iterrows():
-            nombre = str(row.get("Vehículo", f"Opción {idx+1}"))
+            nombre = str(row[cols[0]])
             if nombre.strip() == "" or nombre.lower() == "nan": continue
-            largo = parse_num(row.get("Largo útil (m)", 13.60))
-            ancho = parse_num(row.get("Ancho útil (m)", 2.48))
-            peso = parse_num(row.get("Carga útil (kg)", 24000))
+            
+            largo = parse_num(row[cols[1]] if len(cols) > 1 else None, 13.60)
+            ancho = parse_num(row[cols[2]] if len(cols) > 2 else None, 2.48)
+            peso = parse_num(row[cols[3]] if len(cols) > 3 else None, 24000)
+            
             dic_vehiculos[nombre] = {"largo": largo, "ancho": ancho, "peso": peso}
             
     if not dic_vehiculos:
-        # Fallback de seguridad si falla la hoja o el GID no es válido aún
+        # Fallback de seguridad si la pestaña está vacía
         dic_vehiculos = {
             "Tráiler Estándar 13.6m": {"largo": 13.60, "ancho": 2.48, "peso": 24000},
             "Rígido 18t (8.0m)": {"largo": 8.00, "ancho": 2.45, "peso": 9000},
