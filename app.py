@@ -187,18 +187,31 @@ with col_izq:
 
     # --- SECCIÓN AÑADIR MATERIAL EXTRA ---
     st.subheader("➕ Añadir Material Extra")
-    if df_catalogo is not None:
+    if df_catalogo is not None and "Categoría" in df_catalogo.columns:
+        # 1. Filtramos las categorías únicas que existen en tu Excel
+        categorias_unicas = df_catalogo["Categoría"].dropna().unique().tolist()
+        categorias_unicas.sort() # Las ordenamos alfabéticamente
+        
+        # 2. Primer desplegable: Seleccionar Familia
+        cat_sel = st.selectbox("1. Filtra por Familia:", categorias_unicas)
+        
+        # 3. Filtramos el Excel virtualmente para quedarnos solo con esa familia
+        df_filtrado = df_catalogo[df_catalogo["Categoría"] == cat_sel]
+        
         opciones_cat = {}
-        for idx, row in df_catalogo.iterrows():
+        for idx, row in df_filtrado.iterrows():
             cod = str(row.get("ID / Código", f"B{idx+1}"))
             nom = str(row.get("Descripción / Unidad Logística", cod))
             opciones_cat[f"{nom} ({cod})"] = cod
             
-        sel_extra = st.selectbox("Buscar en catálogo de almacén:", list(opciones_cat.keys()))
+        # 4. Segundo desplegable: Seleccionar el bulto concreto de esa familia
+        articulo_sel = st.selectbox("2. Selecciona el Bulto:", list(opciones_cat.keys()))
+        
+        # 5. Cantidad y botón
         cant_extra = st.number_input("Cantidad a añadir:", min_value=1, value=1, step=1, key="cant_extra")
         
         if st.button("Añadir al camión"):
-            cod_sel = opciones_cat[sel_extra]
+            cod_sel = opciones_cat[articulo_sel]
             st.session_state.cantidades[cod_sel] += cant_extra
             st.rerun()
 
