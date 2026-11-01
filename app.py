@@ -381,4 +381,4 @@ def ejecutar_skyline(items_entrada, orden_familias):
             left_x = skyline[v_start - 1] if v_start > 0 else float("inf")
             right_x = skyline[v_start + v_len] if (v_start + v_len) < TRUCK_W_CM else float("inf")
             raise_to = min(left_x, right_x)
-            if raise_to == float("inf") or raise_to <= min_x
+            if raise_to == float("inf") or raise_to <= min_x:
