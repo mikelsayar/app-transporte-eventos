@@ -1,2 +1,3 @@
 matplotlib
 pandas
+st-gsheets-connection==1.0.1

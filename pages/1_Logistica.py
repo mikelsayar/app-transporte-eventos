@@ -4,26 +4,40 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from collections import defaultdict, Counter
+from streamlit_gsheets import GSheetsConnection  # 👈 NUEVA LIBRERÍA DE SEGURIDAD
 
 st.set_page_config(page_title="Gestor de Transporte", layout="wide", page_icon="🚛")
 
 # --- ENLACES A GOOGLE SHEETS ---
-CSV_URL_CATALOGO = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv"
-# 👇 MANTÉN AQUÍ EL GID REAL DE TU PESTAÑA DE VEHÍCULOS
-CSV_URL_VEHICULOS = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/export?format=csv&gid=102"
+# Solo necesitamos el enlace general limpio
+URL_DOCUMENTO = "https://docs.google.com/spreadsheets/d/1N0Lj_zBfrLAdGmhsCwFnUQnOhFE9Ih6eoMdWMB5qV4c/edit"
 
 def parse_num(val, default=0.0):
     if pd.isna(val) or val is None or str(val).strip() == '': return default
     try: return float(str(val).replace(',', '.').strip())
     except: return default
 
-@st.cache_data(ttl=60)
+# Quitamos el @st.cache_data porque la nueva conexión ya gestiona la caché sola
 def cargar_datos():
-    try: df_cat = pd.read_csv(CSV_URL_CATALOGO)
-    except: df_cat = None
-    try: df_veh = pd.read_csv(CSV_URL_VEHICULOS)
-    except: df_veh = None
-    return df_cat, df_veh
+    try:
+        # 1. Establecer conexión segura buscando automáticamente tu secrets.toml
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        
+        # 2. Leer las pestañas por su nombre exacto
+        # ⚠️ IMPORTANTE: Asegúrate de que la segunda pestaña se llama exactamente "Vehículos"
+        df_cat = conn.read(spreadsheet=URL_DOCUMENTO, worksheet="Catálogo", ttl=60)
+        df_veh = conn.read(spreadsheet=URL_DOCUMENTO, worksheet="Vehículos", ttl=60)
+        
+        # 3. Limpieza de seguridad por si el Excel manda filas en blanco al final
+        df_cat = df_cat.dropna(how="all")
+        df_veh = df_veh.dropna(how="all")
+        
+        return df_cat, df_veh
+        
+    except Exception as e:
+        # HEMOS QUITADO EL SILENCIADOR: Si algo falla, ahora la web te escupirá el motivo técnico
+        st.error(f"🛑 Error técnico de conexión detectado:\n\n{e}")
+        return None, None
 
 df_catalogo, df_vehiculos = cargar_datos()
 
