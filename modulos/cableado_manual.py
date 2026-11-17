@@ -20,16 +20,22 @@ def mostrar_calculadora_manual():
             c1, c2, c3 = st.columns(3)
             
             nombre = c1.text_input("Nombre", value=f"Sistema {i + 1}", key=f"nombre_{i}")
-            funcion = c2.selectbox("Función", ["Main L+R", "Outfill L+R", "Delay L+R", "Frontfill (Mono)", "Sub (Mono)", "Sub L+R"], key=f"funcion_{i}")
-            modelo = c3.selectbox("Modelo", ["d&b KSL", "d&b GSL", "d&b XSL", "d&b V-Series", "d&b Y-Series", "d&b V10p / Y7p", "d&b SL-SUB", "d&b J-SUB"], key=f"modelo_{i}")
+            
+            # Añadidas las opciones de Sub Volado
+            funciones_lista = ["Main L+R", "Outfill L+R", "Delay L+R", "Frontfill (Mono)", "Sub (Mono)", "Sub L+R", "Sub Volado L+R", "Sub Volado (Mono)"]
+            funcion = c2.selectbox("Función", funciones_lista, key=f"funcion_{i}")
+            
+            # Añadido d&b KSL-SUB
+            modelos_lista = ["d&b KSL", "d&b GSL", "d&b XSL", "d&b V-Series", "d&b Y-Series", "d&b V10p / Y7p", "d&b SL-SUB", "d&b KSL-SUB", "d&b J-SUB"]
+            modelo = c3.selectbox("Modelo", modelos_lista, key=f"modelo_{i}")
             
             c4, c5, _ = st.columns([1, 1, 1])
             cajas = c4.number_input("Cajas por array (o totales si Mono)", min_value=0, max_value=48, value=10, key=f"cajas_{i}")
             ap = c5.checkbox("ArrayProcessing (AP)", value=True, key=f"ap_{i}")
             
-            # Nota visual si el sistema ignora el checkbox de AP
+            # Nota visual para sistemas sin links
             if "GSL" in modelo or "SUB" in modelo:
-                st.caption("ℹ️ *Este sistema funciona siempre a 1 caja por tiro de NLT4 (AP forzado / Activo 2 vías).*")
+                st.caption("ℹ️ *Este sistema rutea 1 caja por tiro de NLT4 (Sin links).*")
 
     col_add, col_sub, _ = st.columns([1, 1, 2])
     with col_add:
@@ -58,15 +64,16 @@ def mostrar_calculadora_manual():
             
             # Banderas de topología
             is_sub = "SUB" in mod
+            is_sub_volado = "Volado" in fun and is_sub
             is_pasivo = "V-Series" in mod or "Y-Series" in mod or "p" in mod or "Frontfill" in fun
             is_gsl = "GSL" in mod
-            is_ksl_xsl = "KSL" in mod or "XSL" in mod
+            is_ksl_xsl = ("KSL" in mod and not is_sub) or "XSL" in mod
 
             # 1. CÁLCULO DE TIROS DE NLT4 Y LINKS
             if is_gsl or is_sub:
                 tiros = cajas
                 links_por_array = 0
-                tiene_ap = True # Forzado visualmente
+                tiene_ap = True # Forzamos la lógica AP matemáticamente para que no cuente links
             elif is_ksl_xsl:
                 if tiene_ap:
                     tiros = cajas
@@ -75,14 +82,13 @@ def mostrar_calculadora_manual():
                     tiros = math.ceil(cajas / 2)
                     links_por_array = math.floor(cajas / 2)
             elif is_pasivo:
-                # 1 tiro NLT4 alimenta hasta 2 cajas pasivas
                 tiros = math.ceil(cajas / 2)
                 links_por_array = math.floor(cajas / 2)
             else:
                 tiros = math.ceil(cajas / 2)
                 links_por_array = math.floor(cajas / 2)
 
-            # 2. Ruteo Físico (LK25 vs NLT8) y Breakouts
+            # 2. RUTEO FÍSICO Y BREAKOUTS
             lk25 = 0
             nlt8 = 0
             brk_lk = 0
@@ -90,15 +96,42 @@ def mostrar_calculadora_manual():
             brk_nlt8_4 = 0
 
             if is_pasivo:
-                # Frontfill/V-Series: 1 NLT8 da servicio a 4 NLT4 (1 ch por NLT4)
+                # Frontfill/V-Series: 1 NLT8 -> Breakout/Cajetín a 4x NLT4
                 nlt8 = math.ceil(tiros / 4)
                 brk_nlt8_4 = nlt8
+                
+            elif is_sub_volado:
+                # Subs Volados: Regla estricta 2-6-8
+                if tiros <= 2:
+                    nlt8 = 1
+                    brk_nlt8_2 = 1
+                elif tiros <= 6:
+                    lk25 = 1
+                    brk_lk = 1
+                elif tiros <= 8:
+                    lk25 = 1
+                    brk_lk = 1
+                    nlt8 = 1
+                    brk_nlt8_2 = 1
+                else:
+                    # Fallback por si vuelas más de 8 excepcionalmente
+                    lk25 = tiros // 6
+                    resto = tiros % 6
+                    if resto > 0:
+                        if resto <= 2:
+                            nlt8 = 1
+                            brk_nlt8_2 = 1
+                        else:
+                            lk25 += 1
+                    brk_lk = lk25
+                    
             elif is_sub:
-                # Subs: Atacamos con NLT8 y Breakout a 2x NLT4
+                # Subs de suelo estándar: NLT8 -> Breakout a 2x NLT4
                 nlt8 = math.ceil(tiros / 2)
                 brk_nlt8_2 = nlt8
+                
             else:
-                # PA Principal (KSL, XSL, GSL) -> LK25 (6 tiros) / NLT8 (2 tiros)
+                # PA Principal (KSL, XSL, GSL) -> LK25 o NLT8
                 if tiros <= 4:
                     nlt8 = math.ceil(tiros / 2)
                     brk_nlt8_2 = nlt8
@@ -117,7 +150,7 @@ def mostrar_calculadora_manual():
             resultados.append({
                 "Sistema": f"{nom} ({mod})",
                 "Cajas": cajas * multiplicador_arrays,
-                "AP": "Sí" if tiene_ap else "No",
+                "AP": "Sí" if tiene_ap and not is_sub else "No/NA",
                 "LK 25": lk25 * multiplicador_arrays,
                 "Brk LK->6x NLT4": brk_lk * multiplicador_arrays,
                 "NLT8": nlt8 * multiplicador_arrays,
