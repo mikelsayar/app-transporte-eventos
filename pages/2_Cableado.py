@@ -7,7 +7,7 @@ st.title("🔌 Gestión de Cableado y Redes")
 st.markdown("Calculadora de tiradas, multipines y mangueras para sistemas de PA.")
 
 # Creamos dos pestañas para separar las lógicas
-tab_manual, tab_archivo = st.tabs(["⚙️ Cálculo Manual (A máximos)", "📁 Cargar Archivo (Próximamente)"])
+tab_manual, tab_archivo = st.tabs(["⚙️ Cálculo Manual (A máximos)", "📁 Cargar Archivo (ArrayCalc)"])
 
 with tab_manual:
     st.subheader("Configuración del Arreglo (Main PA)")
@@ -29,12 +29,16 @@ with tab_manual:
         st.markdown("---")
         st.markdown(f"### 📋 Listado de Material por Lado ({sistema})")
         
-        # Matemática de cables
+        # Matemática de cables (A refinar en el siguiente paso)
         links_audio = cajas_por_lado - 1
         
-        # Asumimos 1 LK y 1 Breakout por arreglo como base (se puede refinar si AP exige más circuitos)
-        multipin = 1
-        breakout = 1
+        # Lógica MUY básica de multipines (la mejoraremos luego para AP)
+        if array_processing:
+             multipin = 2 # Si hay AP, a bulto pedimos 2 LKs por ahora
+             breakout = 2
+        else:
+             multipin = 1
+             breakout = 1
         
         # Construimos una tabla de datos
         resultados = pd.DataFrame({
@@ -52,9 +56,26 @@ with tab_manual:
         })
         
         st.table(resultados)
-        
-        # Resumen total para el almacén
         st.success(f"📦 **TOTAL PARA L+R:** {links_audio * 2}x Links NLT4, {breakout * 2}x Breakouts, {multipin * 2}x Mangueras LK {distancia_lk}.")
-        
+
 with tab_archivo:
-    st.info("Aquí irá el módulo para arrastrar el CSV de ArrayCalc o listas de equipos de Soundvision.")
+    st.subheader("Cargar Export de ArrayCalc")
+    st.markdown("Sube el archivo CSV exportado desde d&b ArrayCalc para leer el patch exacto.")
+    
+    uploaded_file = st.file_uploader("Sube tu archivo CSV de ArrayCalc", type=["csv"])
+    
+    if uploaded_file is not None:
+        try:
+            # Leemos el CSV
+            df_arraycalc = pd.read_csv(uploaded_file)
+            st.success("¡Archivo cargado correctamente!")
+            
+            # Mostramos los datos crudos por ahora para verificar
+            st.markdown("**Datos extraídos del archivo:**")
+            st.dataframe(df_arraycalc)
+            
+            # Aquí añadiremos luego la lógica para contar cajas por arreglo desde el CSV
+            st.info("Próximamente: Lectura automática de links y LKs basada en las columnas del CSV.")
+            
+        except Exception as e:
+            st.error(f"Hubo un error al procesar el archivo: {e}")
