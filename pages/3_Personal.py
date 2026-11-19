@@ -16,13 +16,12 @@ if "bbdd_eventos" not in st.session_state:
 if "evento_activo" not in st.session_state:
     st.session_state.evento_activo = None
 
-st.title("👥 Gestión de Personal y Producción")
+st.title("📋 Hoja de Producción y Personal")
 
 # --- GESTOR DE EVENTOS (CARGAR / NUEVO) ---
 st.markdown("### 📂 Archivo de Eventos")
 c_select, c_btn = st.columns([3, 1])
 
-# Selector para elegir un evento guardado o crear uno nuevo
 opciones_eventos = ["+ Crear Nuevo Evento..."] + list(st.session_state.bbdd_eventos.keys())
 evento_seleccionado = c_select.selectbox("Selecciona un evento para editar o crea uno nuevo:", opciones_eventos)
 
@@ -34,7 +33,6 @@ else:
 st.markdown("---")
 
 # --- VARIABLES DEL FORMULARIO ---
-# Si hay un evento cargado, rellenamos las variables con sus datos. Si es nuevo, en blanco.
 if st.session_state.evento_activo:
     datos_actuales = st.session_state.bbdd_eventos[st.session_state.evento_activo]
     default_nombre = st.session_state.evento_activo
@@ -48,19 +46,31 @@ else:
     default_notas = ""
 
 # --- FORMULARIO DE EDICIÓN ---
-st.markdown("### 📝 Hoja de Producción")
-
-with st.expander("01 | DATOS GENERALES", expanded=True):
+with st.expander("01 | DATOS GENERALES Y ENLACES", expanded=True):
     c1, c2, c3 = st.columns(3)
-    nombre_evento = c1.text_input("Nombre del Evento (Ej. Concierto 5 de Marzo)", value=default_nombre)
+    nombre_evento = c1.text_input("Nombre del Evento", value=default_nombre)
     recinto = c2.text_input("Recinto / Localización", value=default_recinto)
-    cliente = c3.text_input("Cliente / Productora", value=default_cliente)
+    mapa_link = c3.text_input("Enlace a Google Maps")
+    
+    c4, c5, c6 = st.columns(3)
+    cliente = c4.text_input("Cliente / Productora", value=default_cliente)
+    contacto_prod = c5.text_input("Contacto Producción (Nombre y Tlf)")
+    contacto_prl = c6.text_input("Contacto PRL")
 
-with st.expander("02 | PERSONAL TÉCNICO", expanded=False):
-    st.info("Aquí enlazaremos la BBDD de técnicos (Sheets) para asignar FOH, Monitores, LX...")
+with st.expander("02 | PERSONAL TÉCNICO (Asignación)", expanded=False):
+    st.info("Próximamente: Motor dinámico de asignación de técnicos filtrado por rol (FOH, Monitores, LX, Vídeo...).")
 
-with st.expander("06 | AVISOS Y NOTAS INTERNAS", expanded=False):
-    notas = st.text_area("Notas pendientes", value=default_notas)
+with st.expander("03 | PLANNING Y HORARIOS", expanded=False):
+    st.info("Próximamente: Tabla dinámica para añadir filas de horarios (Carga, Montaje, Pruebas, Show).")
+
+with st.expander("04 | VEHÍCULOS Y LOGÍSTICA", expanded=False):
+    st.info("Próximamente: Asignación de furgonetas, camiones, conductores y horas de salida/destino.")
+
+with st.expander("05 | ALOJAMIENTOS Y DIETAS", expanded=False):
+    st.info("Próximamente: Gestión de hoteles, rooming list, horarios de catering y alergias.")
+
+with st.expander("06 | AVISOS Y SEGURIDAD", expanded=False):
+    notas = st.text_area("Notas internas, epis necesarios, acreditaciones, etc.", value=default_notas)
 
 # --- BOTÓN DE GUARDAR / ACTUALIZAR ---
 st.markdown("---")
@@ -68,11 +78,10 @@ if st.button("💾 Guardar Evento en Base de Datos", type="primary"):
     if not nombre_evento:
         st.error("⚠️ El evento debe tener un nombre para poder guardarlo.")
     else:
-        # Guardamos la info escrita en el formulario dentro de nuestra BBDD
         st.session_state.bbdd_eventos[nombre_evento] = {
             "recinto": recinto,
             "cliente": cliente,
             "notas": notas
         }
-        st.success(f"✅ Evento '{nombre_evento}' guardado correctamente. (En el futuro, esto se enviará a Google Sheets).")
-        st.rerun() # Recarga la página para que el selector de arriba se actualice
+        st.success(f"✅ Evento '{nombre_evento}' guardado en la memoria de la aplicación.")
+        st.rerun()
