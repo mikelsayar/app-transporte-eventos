@@ -23,7 +23,6 @@ def mostrar_calculadora_manual():
             funciones_lista = ["Main L+R", "Outfill L+R", "Delay L+R", "Frontfill (Mono)", "Sub (Mono)", "Sub L+R", "Sub Volado L+R", "Sub Volado (Mono)"]
             funcion = c2.selectbox("Función", funciones_lista, key=f"funcion_{i}")
             
-            # Añadido XSL-SUB a la lista de standalone
             modelos_lista = ["d&b KSL", "d&b GSL", "d&b XSL", "d&b V-Series", "d&b Y-Series", "d&b V10p / Y7p", "d&b SL-SUB", "d&b KSL-SUB", "d&b XSL-SUB", "d&b J-SUB"]
             modelo = c3.selectbox("Modelo", modelos_lista, key=f"modelo_{i}")
             
@@ -36,7 +35,6 @@ def mostrar_calculadora_manual():
             else:
                 ap = c5.checkbox("ArrayProcessing (AP)", value=True, key=f"ap_{i}")
             
-            # Aviso dinámico excluyendo explícitamente al XSL-SUB
             if "GSL" in modelo or "SL-SUB" in modelo or "KSL-SUB" in modelo or "J-SUB" in modelo:
                 st.caption("ℹ️ *Este sistema rutea 1 caja por tiro de NLT4 (Sin links).*")
 
@@ -76,7 +74,32 @@ def mostrar_calculadora_manual():
             is_sub_linkeable = "XSL-SUB" in mod
             is_sub_no_linkeable = is_sub and not is_sub_linkeable
 
-            # 1. CÁLCULO DE TIROS DE NLT4 Y LINKS PARA TOPS O SUBS STANDALONE
+            # 1. CÁLCULO DE ETAPAS (D80/D40) POR CANALES
+            ch_por_caja_top = 0
+            if is_gsl or is_sub_no_linkeable:
+                ch_por_caja_top = 2
+            elif is_ksl_xsl:
+                ch_por_caja_top = 2 if tiene_ap else 1
+            elif is_sub_linkeable:
+                ch_por_caja_top = 1
+            elif is_pasivo:
+                ch_por_caja_top = 0.5  # 2 cajas por canal = 8 cajas por etapa (4 ch)
+                
+            canales_tops = math.ceil(cajas * ch_por_caja_top)
+            
+            canales_subs_mixtos = 0
+            if mod == "d&b XSL" and cajas_sub > 0:
+                canales_subs_mixtos = math.ceil(cajas_sub * 1) # XSL-SUB: 1 canal/sub
+            elif mod == "d&b KSL" and cajas_sub > 0:
+                canales_subs_mixtos = cajas_sub * 2            # KSL-SUB: 2 canales/sub
+                
+            canales_totales_array = canales_tops + canales_subs_mixtos
+            
+            # Dividimos los canales totales de 1 array entre los 4 canales físicos de la etapa
+            etapas_por_array = math.ceil(canales_totales_array / 4)
+            etapas_totales_sistema = etapas_por_array * multiplicador_arrays
+
+            # 2. CÁLCULO DE TIROS DE NLT4 Y LINKS PARA TOPS O SUBS STANDALONE
             tiros_tops = 0
             links_por_array = 0
             
@@ -97,17 +120,17 @@ def mostrar_calculadora_manual():
                 tiros_tops = math.ceil(cajas / 2)
                 links_por_array = math.floor(cajas / 2)
 
-            # LÓGICA DE SUBS VOLADOS MIXTOS (En la misma matriz que Tops)
+            # LÓGICA DE SUBS VOLADOS MIXTOS
             tiros_subs_mixtos = 0
             if mod == "d&b XSL" and cajas_sub > 0:
                 tiros_subs_mixtos = math.ceil(cajas_sub / 2)
-                links_por_array += math.floor(cajas_sub / 2) # XSL-SUB se linkea
+                links_por_array += math.floor(cajas_sub / 2)
             elif mod == "d&b KSL" and cajas_sub > 0:
-                tiros_subs_mixtos = cajas_sub # KSL-SUB no se linkea, 1 tiro directo
+                tiros_subs_mixtos = cajas_sub
             
             tiros_totales = tiros_tops + tiros_subs_mixtos
 
-            # 2. RUTEO FÍSICO Y BREAKOUTS (Tronco común)
+            # 3. RUTEO FÍSICO Y BREAKOUTS (Tronco común)
             lk25 = 0
             nlt8 = 0
             brk_lk = 0
@@ -165,7 +188,8 @@ def mostrar_calculadora_manual():
             resultados.append({
                 "Sistema": f"{nom} ({mod})",
                 "Cajas": cajas_str,
-                "AP": "Sí" if tiene_ap and not is_sub else "No/NA",
+                "Etapas (D80/D40)": etapas_totales_sistema,
+                "AP": "Sí" if tiene_ap and not is_sub else "No",
                 "LK 25": lk25 * multiplicador_arrays,
                 "Brk LK->6x NLT4": brk_lk * multiplicador_arrays,
                 "NLT8": nlt8 * multiplicador_arrays,
@@ -179,6 +203,10 @@ def mostrar_calculadora_manual():
             st.dataframe(df, use_container_width=True, hide_index=True)
             
             st.success("📦 **TOTALES GLOBALES PARA ALMACÉN:**")
+            
+            total_etapas = df['Etapas (D80/D40)'].sum()
+            st.metric("🔌 ETAPAS TOTALES (D80/D40)", f"{total_etapas} unidades", f"Equivale a {math.ceil(total_etapas / 3)} Touring Racks (3x)")
+            st.markdown("---")
             
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Mangueras LK 25", df['LK 25'].sum())
