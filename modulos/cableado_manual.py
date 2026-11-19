@@ -83,23 +83,22 @@ def mostrar_calculadora_manual():
             elif is_sub_linkeable:
                 ch_por_caja_top = 1
             elif is_pasivo:
-                ch_por_caja_top = 0.5  # 2 cajas por canal = 8 cajas por etapa (4 ch)
+                ch_por_caja_top = 0.5
                 
             canales_tops = math.ceil(cajas * ch_por_caja_top)
             
             canales_subs_mixtos = 0
             if mod == "d&b XSL" and cajas_sub > 0:
-                canales_subs_mixtos = math.ceil(cajas_sub * 1) # XSL-SUB: 1 canal/sub
+                canales_subs_mixtos = math.ceil(cajas_sub * 1)
             elif mod == "d&b KSL" and cajas_sub > 0:
-                canales_subs_mixtos = cajas_sub * 2            # KSL-SUB: 2 canales/sub
+                canales_subs_mixtos = cajas_sub * 2
                 
             canales_totales_array = canales_tops + canales_subs_mixtos
             
-            # Dividimos los canales totales de 1 array entre los 4 canales físicos de la etapa
             etapas_por_array = math.ceil(canales_totales_array / 4)
             etapas_totales_sistema = etapas_por_array * multiplicador_arrays
 
-            # 2. CÁLCULO DE TIROS DE NLT4 Y LINKS PARA TOPS O SUBS STANDALONE
+            # 2. CÁLCULO DE TIROS DE NLT4 Y LINKS
             tiros_tops = 0
             links_por_array = 0
             
@@ -120,7 +119,6 @@ def mostrar_calculadora_manual():
                 tiros_tops = math.ceil(cajas / 2)
                 links_por_array = math.floor(cajas / 2)
 
-            # LÓGICA DE SUBS VOLADOS MIXTOS
             tiros_subs_mixtos = 0
             if mod == "d&b XSL" and cajas_sub > 0:
                 tiros_subs_mixtos = math.ceil(cajas_sub / 2)
@@ -130,7 +128,7 @@ def mostrar_calculadora_manual():
             
             tiros_totales = tiros_tops + tiros_subs_mixtos
 
-            # 3. RUTEO FÍSICO Y BREAKOUTS (Tronco común)
+            # 3. RUTEO FÍSICO Y BREAKOUTS
             lk25 = 0
             nlt8 = 0
             brk_lk = 0
@@ -189,7 +187,7 @@ def mostrar_calculadora_manual():
                 "Sistema": f"{nom} ({mod})",
                 "Cajas": cajas_str,
                 "Etapas (D80/D40)": etapas_totales_sistema,
-                "AP": "Sí" if tiene_ap and not is_sub else "No",
+                "AP": "Sí" if tiene_ap and not is_sub else "No/NA",
                 "LK 25": lk25 * multiplicador_arrays,
                 "Brk LK->6x NLT4": brk_lk * multiplicador_arrays,
                 "NLT8": nlt8 * multiplicador_arrays,
