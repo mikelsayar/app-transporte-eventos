@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import datetime
+import copy
 
 st.set_page_config(page_title="Gestión de Personal", page_icon="👥", layout="wide")
 
@@ -32,7 +33,6 @@ if "bbdd_eventos" not in st.session_state:
             "toro": "Sí, 1 toro con conductor",
             "personal_cd": "4 manos carga/descarga",
             "notas": "Falta confirmar el hotel de los técnicos de luces.",
-            # Memoria del personal asignado a este evento
             "personal": {"Sonido": [], "Iluminación": [], "Vídeo": [], "Rigging": []}
         }
     }
@@ -40,6 +40,39 @@ if "bbdd_eventos" not in st.session_state:
 if "evento_activo" not in st.session_state:
     st.session_state.evento_activo = None
 
+# ==========================================
+# 🛠️ BARRA LATERAL: GESTOR DE TÉCNICOS
+# ==========================================
+with st.sidebar:
+    st.markdown("## 🛠️ Base de Datos de Personal")
+    
+    with st.expander("➕ Añadir Nuevo Técnico", expanded=False):
+        nuevo_nombre = st.text_input("Nombre del Técnico")
+        todos_los_roles = ["FOH", "Monitores", "PA System", "RF", "Escenario", "Téc. Sonido", 
+                           "Operadora LX", "Téc. Iluminación", "Téc. Pantalla", "Vídeo", "Rigging", "Carga"]
+        nuevos_roles = st.multiselect("Etiquetas / Puestos capacitados", todos_los_roles)
+        
+        if st.button("Guardar Técnico", type="primary", use_container_width=True):
+            if nuevo_nombre and nuevos_roles:
+                st.session_state.bbdd_tecnicos[nuevo_nombre] = nuevos_roles
+                st.success(f"✅ Añadido a la plantilla.")
+                st.rerun()
+            else:
+                st.error("Rellena nombre y elige al menos un rol.")
+                
+    with st.expander("📋 Ver / Editar Plantilla (Roster)", expanded=False):
+        for tec_nombre, roles in list(st.session_state.bbdd_tecnicos.items()):
+            c_nom, c_del = st.columns([3, 1])
+            c_nom.markdown(f"**{tec_nombre}**\n\n*{', '.join(roles)}*")
+            if c_del.button("❌", key=f"del_roster_{tec_nombre}", help="Borrar técnico"):
+                del st.session_state.bbdd_tecnicos[tec_nombre]
+                st.rerun()
+            st.markdown("---")
+
+
+# ==========================================
+# PANTALLA PRINCIPAL: HOJA DE PRODUCCIÓN
+# ==========================================
 st.title("📋 Hoja de Producción y Personal")
 
 # --- BUSCADOR Y ARCHIVO DE EVENTOS ---
@@ -110,14 +143,14 @@ else:
     default_notas = ""
     default_personal = {"Sonido": [], "Iluminación": [], "Vídeo": [], "Rigging": []}
 
-# Memoria temporal para la edición del personal en la interfaz
 if "edit_personal" not in st.session_state or st.session_state.get("last_event") != default_nombre:
-    # Hacemos una copia para no alterar la BBDD hasta que se pulse "Guardar"
-    import copy
     st.session_state.edit_personal = copy.deepcopy(default_personal)
     st.session_state.last_event = default_nombre
 
+
 # --- FORMULARIO DE EDICIÓN ---
+
+# [BLOQUE 01 INTACTO]
 with st.expander("01 | DATOS GENERALES Y ENLACES", expanded=True):
     c1, c2, c3, c4 = st.columns([1.5, 1, 1.5, 1.5])
     num_produccion = c1.text_input("Nº Producción / Nombre Evento", value=default_nombre, placeholder="Ej. PROD-001 | Gira Verano")
@@ -144,11 +177,10 @@ with st.expander("01 | DATOS GENERALES Y ENLACES", expanded=True):
 with st.expander("02 | PERSONAL TÉCNICO (Asignación)", expanded=True):
     st.markdown("Asigna los perfiles necesarios para cada departamento. Los técnicos se filtrarán según sus aptitudes.")
     
-    # Definimos los roles posibles por departamento
     roles_por_dpto = {
-        "Sonido": ["FOH", "Monitores", "PA System", "RF", "Escenario", "Téc. Sonido"],
-        "Iluminación": ["Operadora LX", "Téc. Iluminación"],
-        "Vídeo": ["Téc. Pantalla", "Vídeo"],
+        "Sonido": ["FOH", "Monitores", "PA System", "RF", "Escenario", "Téc. Sonido", "Carga"],
+        "Iluminación": ["Operadora LX", "Téc. Iluminación", "Carga"],
+        "Vídeo": ["Téc. Pantalla", "Vídeo", "Carga"],
         "Rigging": ["Rigging"]
     }
     
@@ -156,7 +188,6 @@ with st.expander("02 | PERSONAL TÉCNICO (Asignación)", expanded=True):
     
     def mostrar_dpto(nombre_dpto, tab):
         with tab:
-            # Mostramos los asignados actualmente
             if st.session_state.edit_personal[nombre_dpto]:
                 for idx, asignacion in enumerate(st.session_state.edit_personal[nombre_dpto]):
                     col_rol, col_nom, col_del = st.columns([2, 2, 1])
@@ -167,11 +198,9 @@ with st.expander("02 | PERSONAL TÉCNICO (Asignación)", expanded=True):
                         st.rerun()
                 st.markdown("---")
             
-            # Selector para añadir nuevos
             c_rol, c_tec, c_btn_add = st.columns([2, 2, 1])
             rol_elegido = c_rol.selectbox("Rol", roles_por_dpto[nombre_dpto], key=f"rol_{nombre_dpto}")
             
-            # Filtrar el Roster: ¿Quién tiene esta etiqueta en sus habilidades?
             candidatos = [nom for nom, aptitudes in st.session_state.bbdd_tecnicos.items() if rol_elegido in aptitudes]
             
             if not candidatos:
@@ -220,7 +249,6 @@ if st.button("💾 Guardar / Actualizar Evento", type="primary"):
             "toro": toro,
             "personal_cd": personal_cd,
             "notas": notas,
-            # Guardamos la plantilla de personal al pulsar el botón final
             "personal": st.session_state.edit_personal
         }
         st.session_state.evento_activo = num_produccion
