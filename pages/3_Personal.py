@@ -33,7 +33,7 @@ if "bbdd_eventos" not in st.session_state:
             "toro": "Sí, 1 toro con conductor",
             "personal_cd": "4 manos carga/descarga",
             "notas": "Falta confirmar el hotel de los técnicos de luces.",
-            "personal": {"Sonido": [], "Iluminación": [], "Vídeo": [], "Rigging": []}
+            "personal": {"dias": 1, "Sonido": [], "Iluminación": [], "Vídeo": [], "Rigging": []}
         }
     }
 
@@ -95,7 +95,9 @@ if st.session_state.evento_activo:
     default_toro = datos_actuales.get("toro", "")
     default_personal_cd = datos_actuales.get("personal_cd", "")
     default_notas = datos_actuales.get("notas", "")
-    default_personal = datos_actuales.get("personal", {"Sonido": [], "Iluminación": [], "Vídeo": [], "Rigging": []})
+    default_personal = datos_actuales.get("personal", {"dias": 1, "Sonido": [], "Iluminación": [], "Vídeo": [], "Rigging": []})
+    if "dias" not in default_personal:
+        default_personal["dias"] = 1
 else:
     default_nombre = ""
     default_fecha = datetime.date.today()
@@ -111,7 +113,7 @@ else:
     default_toro = ""
     default_personal_cd = ""
     default_notas = ""
-    default_personal = {"Sonido": [], "Iluminación": [], "Vídeo": [], "Rigging": []}
+    default_personal = {"dias": 1, "Sonido": [], "Iluminación": [], "Vídeo": [], "Rigging": []}
 
 if "edit_personal" not in st.session_state or st.session_state.get("last_event") != default_nombre:
     st.session_state.edit_personal = copy.deepcopy(default_personal)
@@ -120,7 +122,7 @@ if "edit_personal" not in st.session_state or st.session_state.get("last_event")
 
 # --- FORMULARIO DE EDICIÓN ---
 
-# [BLOQUE 01 INTACTO]
+# [BLOQUE 01 INTACTO Y SELLADO]
 with st.expander("01 | DATOS GENERALES Y ENLACES", expanded=True):
     c1, c2, c3, c4 = st.columns([1.5, 1, 1.5, 1.5])
     num_produccion = c1.text_input("Nº Producción / Nombre Evento", value=default_nombre, placeholder="Ej. PROD-001 | Gira Verano")
@@ -143,9 +145,14 @@ with st.expander("01 | DATOS GENERALES Y ENLACES", expanded=True):
         toro = st.text_input("Toro / Torero", value=default_toro)
         personal_cd = st.text_input("Personal C/D", value=default_personal_cd)
 
-# --- BLOQUE 02: PERSONAL TÉCNICO (NUEVO FLUJO POR NECESIDADES) ---
+# --- BLOQUE 02: PERSONAL TÉCNICO MULTI-DÍA ---
 with st.expander("02 | PERSONAL TÉCNICO (Entradas y Salidas)", expanded=True):
-    st.markdown("1. Crea el puesto (fase y rol). 2. Asigna un técnico cuando lo sepas. 3. Marca la casilla si está confirmado.")
+    
+    col_dias, _ = st.columns([1, 3])
+    num_dias = col_dias.number_input("📅 Días de Producción del Evento", min_value=1, max_value=15, value=st.session_state.edit_personal.get("dias", 1))
+    st.session_state.edit_personal["dias"] = num_dias
+    
+    st.markdown("---")
     
     roles_por_dpto = {
         "Sonido": ["TÉC. SONIDO", "FOH", "Monitores", "RF", "PA System", "Escenario"],
@@ -160,54 +167,59 @@ with st.expander("02 | PERSONAL TÉCNICO (Entradas y Salidas)", expanded=True):
     
     def mostrar_dpto(nombre_dpto, tab):
         with tab:
-            if st.button(f"➕ Añadir Puesto a cubrir ({nombre_dpto})", key=f"add_puesto_{nombre_dpto}"):
-                st.session_state.edit_personal[nombre_dpto].append({
-                    "fase": "MONTAJE",
-                    "rol": roles_por_dpto[nombre_dpto][0],
-                    "nombre": "--- Sin asignar ---",
-                    "confirmado": False
-                })
-                st.rerun()
+            # Iteramos por cada día de producción
+            for dia in range(1, num_dias + 1):
+                st.markdown(f"#### 📅 DÍA {dia}")
                 
-            st.markdown("---")
-            
-            if st.session_state.edit_personal[nombre_dpto]:
-                # Encabezados de la tabla dinámica
-                c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 2, 0.7, 0.5])
-                c1.caption("FASE / ENTRADA")
-                c2.caption("ROL NECESARIO")
-                c3.caption("TÉCNICO ASIGNADO")
-                c4.caption("CONFIRMADO")
+                # Filtrar vacantes para este día en concreto
+                vacantes_este_dia = [v for v in st.session_state.edit_personal[nombre_dpto] if v.get("dia", 1) == dia]
                 
-                for idx, vacante in enumerate(st.session_state.edit_personal[nombre_dpto]):
+                if vacantes_este_dia:
                     c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 2, 0.7, 0.5])
+                    c1.caption("FASE / ENTRADA")
+                    c2.caption("ROL NECESARIO")
+                    c3.caption("TÉCNICO ASIGNADO")
+                    c4.caption("CONFIRMADO")
+                
+                # Renderizar las filas asegurando que pertenecen a este día
+                for idx, vacante in enumerate(st.session_state.edit_personal[nombre_dpto]):
+                    if vacante.get("dia", 1) == dia:
+                        c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 2, 0.7, 0.5])
+                        
+                        fase_idx = fases_evento.index(vacante.get("fase", "MONTAJE")) if vacante.get("fase") in fases_evento else 1
+                        vacante["fase"] = c1.selectbox("Fase", fases_evento, index=fase_idx, key=f"fase_{nombre_dpto}_{idx}", label_visibility="collapsed")
+                        
+                        rol_idx = roles_por_dpto[nombre_dpto].index(vacante["rol"]) if vacante["rol"] in roles_por_dpto[nombre_dpto] else 0
+                        vacante["rol"] = c2.selectbox("Rol", roles_por_dpto[nombre_dpto], index=rol_idx, key=f"rol_{nombre_dpto}_{idx}", label_visibility="collapsed")
+                        
+                        candidatos = [nom for nom, aptitudes in st.session_state.bbdd_tecnicos.items() if vacante["rol"] in aptitudes]
+                        opciones_tec = ["--- Sin asignar ---"] + candidatos
+                        
+                        tec_actual = vacante.get("nombre", "--- Sin asignar ---")
+                        if tec_actual not in opciones_tec:
+                            tec_actual = "--- Sin asignar ---"
+                        tec_idx = opciones_tec.index(tec_actual)
+                        
+                        vacante["nombre"] = c3.selectbox("Asignado", opciones_tec, index=tec_idx, key=f"tec_{nombre_dpto}_{idx}", label_visibility="collapsed")
+                        
+                        vacante["confirmado"] = c4.checkbox("Sí", value=vacante.get("confirmado", False), key=f"conf_{nombre_dpto}_{idx}")
+                        
+                        if c5.button("❌", key=f"del_{nombre_dpto}_{idx}"):
+                            st.session_state.edit_personal[nombre_dpto].pop(idx)
+                            st.rerun()
+                
+                # Botón de añadir específico para este día
+                if st.button(f"➕ Añadir Puesto (Día {dia})", key=f"add_{nombre_dpto}_d{dia}"):
+                    st.session_state.edit_personal[nombre_dpto].append({
+                        "dia": dia,
+                        "fase": "MONTAJE",
+                        "rol": roles_por_dpto[nombre_dpto][0],
+                        "nombre": "--- Sin asignar ---",
+                        "confirmado": False
+                    })
+                    st.rerun()
                     
-                    # 1. Selector de Fase
-                    fase_idx = fases_evento.index(vacante.get("fase", "MONTAJE")) if vacante.get("fase") in fases_evento else 1
-                    vacante["fase"] = c1.selectbox("Fase", fases_evento, index=fase_idx, key=f"fase_{nombre_dpto}_{idx}", label_visibility="collapsed")
-                    
-                    # 2. Selector de Rol
-                    rol_idx = roles_por_dpto[nombre_dpto].index(vacante["rol"]) if vacante["rol"] in roles_por_dpto[nombre_dpto] else 0
-                    vacante["rol"] = c2.selectbox("Rol", roles_por_dpto[nombre_dpto], index=rol_idx, key=f"rol_{nombre_dpto}_{idx}", label_visibility="collapsed")
-                    
-                    # 3. Selector de Técnico (Filtrado por el ROL seleccionado)
-                    candidatos = [nom for nom, aptitudes in st.session_state.bbdd_tecnicos.items() if vacante["rol"] in aptitudes]
-                    opciones_tec = ["--- Sin asignar ---"] + candidatos
-                    
-                    tec_actual = vacante.get("nombre", "--- Sin asignar ---")
-                    if tec_actual not in opciones_tec:
-                        tec_actual = "--- Sin asignar ---"
-                    tec_idx = opciones_tec.index(tec_actual)
-                    
-                    vacante["nombre"] = c3.selectbox("Asignado", opciones_tec, index=tec_idx, key=f"tec_{nombre_dpto}_{idx}", label_visibility="collapsed")
-                    
-                    # 4. Checkbox de Confirmado
-                    vacante["confirmado"] = c4.checkbox("Sí", value=vacante.get("confirmado", False), key=f"conf_{nombre_dpto}_{idx}")
-                    
-                    # 5. Botón de Eliminar Fila
-                    if c5.button("❌", key=f"del_{nombre_dpto}_{idx}"):
-                        st.session_state.edit_personal[nombre_dpto].pop(idx)
-                        st.rerun()
+                st.markdown("---")
 
     mostrar_dpto("Sonido", tab_so)
     mostrar_dpto("Iluminación", tab_lx)
