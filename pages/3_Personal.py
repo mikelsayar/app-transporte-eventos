@@ -161,17 +161,16 @@ with st.expander("02 | PERSONAL TÉCNICO (Entradas y Salidas)", expanded=True):
         "Rigging": ["RIGGING"]
     }
     
-    fases_evento = ["RIGGING", "MONTAJE", "SHOW + DESMONTAJE", "TODO EL EVENTO"]
+    # ¡Nuevas opciones de fase añadidas aquí!
+    fases_evento = ["RIGGING", "MONTAJE", "SHOW", "SHOW + DESMONTAJE", "TURNO 1", "DOBLE TURNO", "TODO EL EVENTO"]
     
     tab_so, tab_lx, tab_vid, tab_rig = st.tabs(["🔊 Sonido", "💡 Iluminación", "📺 Vídeo", "⛓️ Rigging"])
     
     def mostrar_dpto(nombre_dpto, tab):
         with tab:
-            # Iteramos por cada día de producción
             for dia in range(1, num_dias + 1):
                 st.markdown(f"#### 📅 DÍA {dia}")
                 
-                # Filtrar vacantes para este día en concreto
                 vacantes_este_dia = [v for v in st.session_state.edit_personal[nombre_dpto] if v.get("dia", 1) == dia]
                 
                 if vacantes_este_dia:
@@ -181,7 +180,6 @@ with st.expander("02 | PERSONAL TÉCNICO (Entradas y Salidas)", expanded=True):
                     c3.caption("TÉCNICO ASIGNADO")
                     c4.caption("CONFIRMADO")
                 
-                # Renderizar las filas asegurando que pertenecen a este día
                 for idx, vacante in enumerate(st.session_state.edit_personal[nombre_dpto]):
                     if vacante.get("dia", 1) == dia:
                         c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 2, 0.7, 0.5])
@@ -208,7 +206,6 @@ with st.expander("02 | PERSONAL TÉCNICO (Entradas y Salidas)", expanded=True):
                             st.session_state.edit_personal[nombre_dpto].pop(idx)
                             st.rerun()
                 
-                # Botón de añadir específico para este día
                 if st.button(f"➕ Añadir Puesto (Día {dia})", key=f"add_{nombre_dpto}_d{dia}"):
                     st.session_state.edit_personal[nombre_dpto].append({
                         "dia": dia,
