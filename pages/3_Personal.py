@@ -145,51 +145,60 @@ with st.expander("01 | DATOS GENERALES Y ENLACES", expanded=True):
         toro = st.text_input("Toro / Torero", value=default_toro)
         personal_cd = st.text_input("Personal C/D", value=default_personal_cd)
 
-# --- BLOQUE 02: PERSONAL TÉCNICO MULTI-DÍA ---
+# --- BLOQUE 02: PERSONAL TÉCNICO ORDENADO POR DÍAS ---
 with st.expander("02 | PERSONAL TÉCNICO (Entradas y Salidas)", expanded=True):
     
     col_dias, _ = st.columns([1, 3])
-    num_dias = col_dias.number_input("📅 Días de Producción del Evento", min_value=1, max_value=15, value=st.session_state.edit_personal.get("dias", 1))
+    num_dias = col_dias.number_input("📅 Días de Producción", min_value=1, max_value=15, value=st.session_state.edit_personal.get("dias", 1))
     st.session_state.edit_personal["dias"] = num_dias
     
     st.markdown("---")
     
     roles_por_dpto = {
-        "Sonido": ["TÉC. SONIDO", "FOH", "Monitores", "RF", "PA System", "Escenario"],
+        "Rigging": ["RIGGING"],
         "Iluminación": ["TEC ILUMINACIÓN", "Operadora LX"],
-        "Vídeo": ["TÉC. PANTALLA", "Vídeo"],
-        "Rigging": ["RIGGING"]
+        "Sonido": ["TÉC. SONIDO", "FOH", "Monitores", "RF", "PA System", "Escenario"],
+        "Vídeo": ["TÉC. PANTALLA", "Vídeo"]
     }
     
-    # ¡Nuevas opciones de fase añadidas aquí!
     fases_evento = ["RIGGING", "MONTAJE", "SHOW", "SHOW + DESMONTAJE", "TURNO 1", "DOBLE TURNO", "TODO EL EVENTO"]
     
-    tab_so, tab_lx, tab_vid, tab_rig = st.tabs(["🔊 Sonido", "💡 Iluminación", "📺 Vídeo", "⛓️ Rigging"])
+    # Creamos las pestañas por DÍAS en lugar de por departamentos
+    nombres_pestañas = [f"📅 DÍA {d}" for d in range(1, num_dias + 1)]
+    pestañas_dias = st.tabs(nombres_pestañas)
     
-    def mostrar_dpto(nombre_dpto, tab):
-        with tab:
-            for dia in range(1, num_dias + 1):
-                st.markdown(f"#### 📅 DÍA {dia}")
+    # Iteramos día a día
+    for dia_idx, tab_dia in enumerate(pestañas_dias, start=1):
+        with tab_dia:
+            # Orden de entrada lógico: Rigging -> Luces -> Sonido -> Vídeo
+            for dpto, icono in [("Rigging", "⛓️"), ("Iluminación", "💡"), ("Sonido", "🔊"), ("Vídeo", "📺")]:
+                st.markdown(f"#### {icono} {dpto}")
                 
-                vacantes_este_dia = [v for v in st.session_state.edit_personal[nombre_dpto] if v.get("dia", 1) == dia]
+                # Filtramos los puestos creados para este departamento y en este día
+                vacantes_este_dia = [v for v in st.session_state.edit_personal.get(dpto, []) if v.get("dia", 1) == dia_idx]
                 
                 if vacantes_este_dia:
-                    c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 2, 0.7, 0.5])
+                    # Nueva estructura de columnas incluyendo los NO DISPONIBLES
+                    c1, c2, c3, c4, c5, c6 = st.columns([1.2, 1.2, 1.5, 1.5, 0.7, 0.4])
                     c1.caption("FASE / ENTRADA")
-                    c2.caption("ROL NECESARIO")
+                    c2.caption("ROL")
                     c3.caption("TÉCNICO ASIGNADO")
-                    c4.caption("CONFIRMADO")
+                    c4.caption("❌ NO PUEDEN")
+                    c5.caption("CONFIRM")
                 
-                for idx, vacante in enumerate(st.session_state.edit_personal[nombre_dpto]):
-                    if vacante.get("dia", 1) == dia:
-                        c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 2, 0.7, 0.5])
+                for idx, vacante in enumerate(st.session_state.edit_personal.get(dpto, [])):
+                    if vacante.get("dia", 1) == dia_idx:
+                        c1, c2, c3, c4, c5, c6 = st.columns([1.2, 1.2, 1.5, 1.5, 0.7, 0.4])
                         
+                        # 1. Fase
                         fase_idx = fases_evento.index(vacante.get("fase", "MONTAJE")) if vacante.get("fase") in fases_evento else 1
-                        vacante["fase"] = c1.selectbox("Fase", fases_evento, index=fase_idx, key=f"fase_{nombre_dpto}_{idx}", label_visibility="collapsed")
+                        vacante["fase"] = c1.selectbox("Fase", fases_evento, index=fase_idx, key=f"fase_{dpto}_{idx}", label_visibility="collapsed")
                         
-                        rol_idx = roles_por_dpto[nombre_dpto].index(vacante["rol"]) if vacante["rol"] in roles_por_dpto[nombre_dpto] else 0
-                        vacante["rol"] = c2.selectbox("Rol", roles_por_dpto[nombre_dpto], index=rol_idx, key=f"rol_{nombre_dpto}_{idx}", label_visibility="collapsed")
+                        # 2. Rol
+                        rol_idx = roles_por_dpto[dpto].index(vacante["rol"]) if vacante["rol"] in roles_por_dpto[dpto] else 0
+                        vacante["rol"] = c2.selectbox("Rol", roles_por_dpto[dpto], index=rol_idx, key=f"rol_{dpto}_{idx}", label_visibility="collapsed")
                         
+                        # 3. Asignado
                         candidatos = [nom for nom, aptitudes in st.session_state.bbdd_tecnicos.items() if vacante["rol"] in aptitudes]
                         opciones_tec = ["--- Sin asignar ---"] + candidatos
                         
@@ -198,30 +207,46 @@ with st.expander("02 | PERSONAL TÉCNICO (Entradas y Salidas)", expanded=True):
                             tec_actual = "--- Sin asignar ---"
                         tec_idx = opciones_tec.index(tec_actual)
                         
-                        vacante["nombre"] = c3.selectbox("Asignado", opciones_tec, index=tec_idx, key=f"tec_{nombre_dpto}_{idx}", label_visibility="collapsed")
+                        vacante["nombre"] = c3.selectbox("Asignado", opciones_tec, index=tec_idx, key=f"tec_{dpto}_{idx}", label_visibility="collapsed")
                         
-                        vacante["confirmado"] = c4.checkbox("Sí", value=vacante.get("confirmado", False), key=f"conf_{nombre_dpto}_{idx}")
+                        # 4. Los descartados (No pueden)
+                        # Recuperamos la lista de técnicos descartados (si los hay)
+                        rechazados_prev = vacante.get("no_pueden", [])
+                        # Filtramos por si alguien fue borrado de la BBDD general
+                        rechazados_prev = [r for r in rechazados_prev if r in candidatos]
                         
-                        if c5.button("❌", key=f"del_{nombre_dpto}_{idx}"):
-                            st.session_state.edit_personal[nombre_dpto].pop(idx)
+                        vacante["no_pueden"] = c4.multiselect(
+                            "No pueden", 
+                            candidatos, 
+                            default=rechazados_prev, 
+                            key=f"nopueden_{dpto}_{idx}", 
+                            label_visibility="collapsed"
+                        )
+                        
+                        # 5. Confirmado
+                        vacante["confirmado"] = c5.checkbox("Sí", value=vacante.get("confirmado", False), key=f"conf_{dpto}_{idx}")
+                        
+                        # 6. Borrar fila
+                        if c6.button("❌", key=f"del_{dpto}_{idx}"):
+                            st.session_state.edit_personal[dpto].pop(idx)
                             st.rerun()
                 
-                if st.button(f"➕ Añadir Puesto (Día {dia})", key=f"add_{nombre_dpto}_d{dia}"):
-                    st.session_state.edit_personal[nombre_dpto].append({
-                        "dia": dia,
+                # Botón para añadir un hueco en ese departamento y ese día en concreto
+                if st.button(f"➕ Añadir Puesto a {dpto}", key=f"add_{dpto}_d{dia_idx}"):
+                    if dpto not in st.session_state.edit_personal:
+                        st.session_state.edit_personal[dpto] = []
+                    
+                    st.session_state.edit_personal[dpto].append({
+                        "dia": dia_idx,
                         "fase": "MONTAJE",
-                        "rol": roles_por_dpto[nombre_dpto][0],
+                        "rol": roles_por_dpto[dpto][0],
                         "nombre": "--- Sin asignar ---",
+                        "no_pueden": [],
                         "confirmado": False
                     })
                     st.rerun()
                     
                 st.markdown("---")
-
-    mostrar_dpto("Sonido", tab_so)
-    mostrar_dpto("Iluminación", tab_lx)
-    mostrar_dpto("Vídeo", tab_vid)
-    mostrar_dpto("Rigging", tab_rig)
 
 with st.expander("03 | PLANNING Y HORARIOS", expanded=False):
     st.info("Próximamente: Tabla dinámica para horarios.")
