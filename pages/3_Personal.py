@@ -5,15 +5,15 @@ import copy
 
 st.set_page_config(page_title="Gestión de Personal", page_icon="👥", layout="wide")
 
-# --- 1. BASE DE DATOS DE TÉCNICOS (ROSTER) ---
+# --- 1. BASE DE DATOS DE TÉCNICOS (ROSTER INVISIBLE DE MOMENTO) ---
 if "bbdd_tecnicos" not in st.session_state:
     st.session_state.bbdd_tecnicos = {
         "Mikel": ["FOH", "Monitores", "RF", "PA System"],
-        "Ane": ["Téc. Iluminación", "Operadora LX"],
-        "Jon": ["Téc. Sonido", "Escenario", "Carga"],
-        "Sara": ["Téc. Pantalla", "Vídeo"],
-        "Gorka": ["Rigging", "Carga"],
-        "Ibai": ["FOH", "Monitores", "Téc. Sonido"]
+        "Ane": ["TEC ILUMINACIÓN", "Operadora LX"],
+        "Jon": ["TÉC. SONIDO", "Escenario", "Carga"],
+        "Sara": ["TÉC. PANTALLA", "Vídeo"],
+        "Gorka": ["RIGGING", "Carga"],
+        "Ibai": ["FOH", "Monitores", "TÉC. SONIDO"]
     }
 
 # --- 2. BASE DE DATOS DE EVENTOS ---
@@ -39,36 +39,6 @@ if "bbdd_eventos" not in st.session_state:
 
 if "evento_activo" not in st.session_state:
     st.session_state.evento_activo = None
-
-# ==========================================
-# 🛠️ BARRA LATERAL: GESTOR DE TÉCNICOS
-# ==========================================
-with st.sidebar:
-    st.markdown("## 🛠️ Base de Datos de Personal")
-    
-    with st.expander("➕ Añadir Nuevo Técnico", expanded=False):
-        nuevo_nombre = st.text_input("Nombre del Técnico")
-        todos_los_roles = ["FOH", "Monitores", "PA System", "RF", "Escenario", "Téc. Sonido", 
-                           "Operadora LX", "Téc. Iluminación", "Téc. Pantalla", "Vídeo", "Rigging", "Carga"]
-        nuevos_roles = st.multiselect("Etiquetas / Puestos capacitados", todos_los_roles)
-        
-        if st.button("Guardar Técnico", type="primary", use_container_width=True):
-            if nuevo_nombre and nuevos_roles:
-                st.session_state.bbdd_tecnicos[nuevo_nombre] = nuevos_roles
-                st.success(f"✅ Añadido a la plantilla.")
-                st.rerun()
-            else:
-                st.error("Rellena nombre y elige al menos un rol.")
-                
-    with st.expander("📋 Ver / Editar Plantilla (Roster)", expanded=False):
-        for tec_nombre, roles in list(st.session_state.bbdd_tecnicos.items()):
-            c_nom, c_del = st.columns([3, 1])
-            c_nom.markdown(f"**{tec_nombre}**\n\n*{', '.join(roles)}*")
-            if c_del.button("❌", key=f"del_roster_{tec_nombre}", help="Borrar técnico"):
-                del st.session_state.bbdd_tecnicos[tec_nombre]
-                st.rerun()
-            st.markdown("---")
-
 
 # ==========================================
 # PANTALLA PRINCIPAL: HOJA DE PRODUCCIÓN
@@ -173,44 +143,71 @@ with st.expander("01 | DATOS GENERALES Y ENLACES", expanded=True):
         toro = st.text_input("Toro / Torero", value=default_toro)
         personal_cd = st.text_input("Personal C/D", value=default_personal_cd)
 
-# --- BLOQUE 02: PERSONAL TÉCNICO ---
-with st.expander("02 | PERSONAL TÉCNICO (Asignación)", expanded=True):
-    st.markdown("Asigna los perfiles necesarios para cada departamento. Los técnicos se filtrarán según sus aptitudes.")
+# --- BLOQUE 02: PERSONAL TÉCNICO (NUEVO FLUJO POR NECESIDADES) ---
+with st.expander("02 | PERSONAL TÉCNICO (Entradas y Salidas)", expanded=True):
+    st.markdown("1. Crea el puesto (fase y rol). 2. Asigna un técnico cuando lo sepas. 3. Marca la casilla si está confirmado.")
     
     roles_por_dpto = {
-        "Sonido": ["FOH", "Monitores", "PA System", "RF", "Escenario", "Téc. Sonido", "Carga"],
-        "Iluminación": ["Operadora LX", "Téc. Iluminación", "Carga"],
-        "Vídeo": ["Téc. Pantalla", "Vídeo", "Carga"],
-        "Rigging": ["Rigging"]
+        "Sonido": ["TÉC. SONIDO", "FOH", "Monitores", "RF", "PA System", "Escenario"],
+        "Iluminación": ["TEC ILUMINACIÓN", "Operadora LX"],
+        "Vídeo": ["TÉC. PANTALLA", "Vídeo"],
+        "Rigging": ["RIGGING"]
     }
+    
+    fases_evento = ["RIGGING", "MONTAJE", "SHOW + DESMONTAJE", "TODO EL EVENTO"]
     
     tab_so, tab_lx, tab_vid, tab_rig = st.tabs(["🔊 Sonido", "💡 Iluminación", "📺 Vídeo", "⛓️ Rigging"])
     
     def mostrar_dpto(nombre_dpto, tab):
         with tab:
+            if st.button(f"➕ Añadir Puesto a cubrir ({nombre_dpto})", key=f"add_puesto_{nombre_dpto}"):
+                st.session_state.edit_personal[nombre_dpto].append({
+                    "fase": "MONTAJE",
+                    "rol": roles_por_dpto[nombre_dpto][0],
+                    "nombre": "--- Sin asignar ---",
+                    "confirmado": False
+                })
+                st.rerun()
+                
+            st.markdown("---")
+            
             if st.session_state.edit_personal[nombre_dpto]:
-                for idx, asignacion in enumerate(st.session_state.edit_personal[nombre_dpto]):
-                    col_rol, col_nom, col_del = st.columns([2, 2, 1])
-                    col_rol.markdown(f"**{asignacion['rol']}**")
-                    col_nom.markdown(f"👤 {asignacion['nombre']}")
-                    if col_del.button("❌ Quitar", key=f"del_{nombre_dpto}_{idx}"):
+                # Encabezados de la tabla dinámica
+                c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 2, 0.7, 0.5])
+                c1.caption("FASE / ENTRADA")
+                c2.caption("ROL NECESARIO")
+                c3.caption("TÉCNICO ASIGNADO")
+                c4.caption("CONFIRMADO")
+                
+                for idx, vacante in enumerate(st.session_state.edit_personal[nombre_dpto]):
+                    c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 2, 0.7, 0.5])
+                    
+                    # 1. Selector de Fase
+                    fase_idx = fases_evento.index(vacante.get("fase", "MONTAJE")) if vacante.get("fase") in fases_evento else 1
+                    vacante["fase"] = c1.selectbox("Fase", fases_evento, index=fase_idx, key=f"fase_{nombre_dpto}_{idx}", label_visibility="collapsed")
+                    
+                    # 2. Selector de Rol
+                    rol_idx = roles_por_dpto[nombre_dpto].index(vacante["rol"]) if vacante["rol"] in roles_por_dpto[nombre_dpto] else 0
+                    vacante["rol"] = c2.selectbox("Rol", roles_por_dpto[nombre_dpto], index=rol_idx, key=f"rol_{nombre_dpto}_{idx}", label_visibility="collapsed")
+                    
+                    # 3. Selector de Técnico (Filtrado por el ROL seleccionado)
+                    candidatos = [nom for nom, aptitudes in st.session_state.bbdd_tecnicos.items() if vacante["rol"] in aptitudes]
+                    opciones_tec = ["--- Sin asignar ---"] + candidatos
+                    
+                    tec_actual = vacante.get("nombre", "--- Sin asignar ---")
+                    if tec_actual not in opciones_tec:
+                        tec_actual = "--- Sin asignar ---"
+                    tec_idx = opciones_tec.index(tec_actual)
+                    
+                    vacante["nombre"] = c3.selectbox("Asignado", opciones_tec, index=tec_idx, key=f"tec_{nombre_dpto}_{idx}", label_visibility="collapsed")
+                    
+                    # 4. Checkbox de Confirmado
+                    vacante["confirmado"] = c4.checkbox("Sí", value=vacante.get("confirmado", False), key=f"conf_{nombre_dpto}_{idx}")
+                    
+                    # 5. Botón de Eliminar Fila
+                    if c5.button("❌", key=f"del_{nombre_dpto}_{idx}"):
                         st.session_state.edit_personal[nombre_dpto].pop(idx)
                         st.rerun()
-                st.markdown("---")
-            
-            c_rol, c_tec, c_btn_add = st.columns([2, 2, 1])
-            rol_elegido = c_rol.selectbox("Rol", roles_por_dpto[nombre_dpto], key=f"rol_{nombre_dpto}")
-            
-            candidatos = [nom for nom, aptitudes in st.session_state.bbdd_tecnicos.items() if rol_elegido in aptitudes]
-            
-            if not candidatos:
-                tec_elegido = c_tec.selectbox("Técnico", ["Ningún técnico con este rol"], disabled=True, key=f"tec_{nombre_dpto}")
-                c_btn_add.button("Añadir", disabled=True, key=f"add_{nombre_dpto}")
-            else:
-                tec_elegido = c_tec.selectbox("Técnico", candidatos, key=f"tec_{nombre_dpto}")
-                if c_btn_add.button("➕ Añadir", key=f"add_{nombre_dpto}"):
-                    st.session_state.edit_personal[nombre_dpto].append({"rol": rol_elegido, "nombre": tec_elegido})
-                    st.rerun()
 
     mostrar_dpto("Sonido", tab_so)
     mostrar_dpto("Iluminación", tab_lx)
